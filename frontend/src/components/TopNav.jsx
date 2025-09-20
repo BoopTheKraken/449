@@ -10,7 +10,6 @@ export default function TopNav({onToggleSidebar}) {
                     aria-label="Toggle Menu"
                 >
                     <i className="fa-whiteboard fa-semibold fa-bars text-[16px]" aria-hidden="true" ></i>
-                    Mobile Toggle
                 </button>
 
                 <button
@@ -23,7 +22,7 @@ export default function TopNav({onToggleSidebar}) {
                     aria-label="Toggle Sidebar"
                 >
                     <i className="fa-solid fa-bars text-[16px]" aria-hidden="true"></i>
-                    <span className="hidden md:inline">Desktop Toggle</span>
+                    <span className="hidden md:inline"></span>
                 </button>
 
                 <Link to="/" className="flex items-center gap-2 font-semibold text-xl">
