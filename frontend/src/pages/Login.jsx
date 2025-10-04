@@ -69,9 +69,9 @@ function Login() {
                 </div>        
             </div>
             ):(
-                <BrowserRouter>
-                        <Route path="/" elemen={<Whiteboard />} />
-                </BrowserRouter>
+                <div className="card">
+                    <h2>Welcome</h2>
+                </div>
             )}
         </div>
     );
