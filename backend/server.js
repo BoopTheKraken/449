@@ -20,7 +20,7 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => console.log(`Port API on: ${PORT}`));
 
-//redis test
+/*redis test
 redis.set('testkey', 'Yo World!');
   redis.get('testkey').then(val => 
 {
@@ -28,4 +28,4 @@ redis.set('testkey', 'Yo World!');
 }).catch(err =>
 {
     console.error('redis test error:', err);
-});
+}); */
