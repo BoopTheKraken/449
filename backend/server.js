@@ -13,6 +13,7 @@ const io = new Server(server, {cors: {origin: '*'}});
 io.on('connection', (socket) => {
     socket.on('draw', (p) => socket.broadcast.emit('draw', p));
     socket.on('erase', (p) => socket.broadcast.emit('erase', p));
+    socket.on('chatMessage', (msg) => io.emit('chatMessage', msg));
 });
 
 const PORT = process.env.PORT || 4000;

@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import io from "socket.io-client";
+
+const socket = io("http://localhost:4000"); //Connects to backend
 
 export default function Whiteboard() {
     const [selectedTool, setSelectedTool] = useState("pen");
@@ -6,8 +9,12 @@ export default function Whiteboard() {
     const [strokeWidth, setStrokeWidth] = useState(2);
     const [showChat, setShowChat] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
+    const [chatMessages, setChatMessages] = useState([]);
+    const [chatInput, setChatInput] = useState(""); 
+
 
     const colors = ["#000000", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#6D94C5"];
+
 
     // A few placeholders:
     const handleClearBoard = () => {
@@ -28,6 +35,22 @@ export default function Whiteboard() {
     };
     const handleExport = () => {
         console.log("Export board");
+    };
+    
+    //Receive chat message
+     useEffect(() => { 
+        socket.on("chatMessage", (msg) => { 
+            setChatMessages((prev) => [...prev, msg]); 
+        });
+        return () => socket.off("chatMessage"); 
+    }, []);
+
+    //send chat message
+    const sendChatMessage = () => { 
+        if (chatInput.trim() !== "") { 
+            socket.emit("chatMessage", chatInput); 
+            setChatInput(""); 
+        } 
     };
 
     return (
@@ -233,7 +256,33 @@ export default function Whiteboard() {
                     </div>
                 </div>
             </div>
+
+            {/* ===== CHAT PANEL (added) ===== */}
+            {showChat && (
+                <div className="flex flex-col bg-gray-100 border-t mt-2 p-2 h-64 overflow-y-auto" id="chatPanel">
+                    <div className="flex-1 overflow-y-auto mb-2">
+                        {chatMessages.map((msg, idx) => (
+                            <div key={idx} className="p-1 border-b text-sm">{msg}</div>
+                        ))}
+                    </div>
+                    <div className="flex">
+                        <input
+                            type="text"
+                            className="flex-1 border rounded px-2 py-1"
+                            placeholder="Type a message..."
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyPress={(e) => { if (e.key === 'Enter') sendChatMessage(); }}
+                        />
+                        <button
+                            onClick={sendChatMessage}
+                            className="ml-2 px-3 py-1 bg-primary text-white rounded"
+                        >Send</button>
+                    </div>
+                </div>
+            )}
+
         </div>
-    )
+    );
 
 }
