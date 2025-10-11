@@ -256,8 +256,6 @@ export default function Whiteboard() {
                     </div>
                 </div>
             </div>
-
-            {/* ===== CHAT PANEL (added) ===== */}
             {showChat && (
                 <div className="flex flex-col bg-gray-100 border-t mt-2 p-2 h-64 overflow-y-auto" id="chatPanel">
                     <div className="flex-1 overflow-y-auto mb-2">
