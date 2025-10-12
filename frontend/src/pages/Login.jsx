@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { supabase } from "../config/supabaseClient"
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Whiteboard from "./Whiteboard";
+import { Link } from 'react-router-dom'
 import "./Login.css";
 
 function Login() {
@@ -54,24 +53,22 @@ function Login() {
                     onChange={e=>setPassword(e.target.value)}
                 />
                 <div className="button-group">
-                    <button className="login"
+                    <Link className="login" to="/dashboard"
                         onClick={handleLogin}
                         disabled={loading || !email || !password}
                     >
                         Login
-                    </button>
-                    <button className="signup"
+                    </Link>
+                    <Link className="signup" to="/register"
                         onClick={handleSignUp}
                         disabled={loading}
                     >
                         Sign Up
-                    </button>
+                    </Link>
                 </div>        
             </div>
             ):(
-                <div className="card">
-                    <h2>Welcome</h2>
-                </div>
+                <Link to="/Dashboard"></Link>
             )}
         </div>
     );

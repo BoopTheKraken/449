@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import Whiteboard from './pages/Whiteboard';
 
 import './index.css';
+import Dashboard from './pages/Dashboard';
 
 
 function App() {
@@ -18,6 +19,7 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
 
       <Routes>
