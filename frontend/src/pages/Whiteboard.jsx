@@ -1,25 +1,177 @@
 import { useState, useRef, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { io } from "socket.io-client";
+import { useAuth } from "../context/AuthContext";
 import CanvasBoard from "../components/CanvasBoard";
 
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
+
 export default function Whiteboard() {
+  // route
+  const { id: whiteboardId } = useParams();
+  const navigate = useNavigate();
+
+  // auth
+  const { session } = useAuth();
+
+  // drawing state
   const [selectedTool, setSelectedTool] = useState("pen");
   const [color, setColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(2);
 
+  // page state
+  const [whiteboardTitle, setWhiteboardTitle] = useState("Untitled Whiteboard");
+  const [loading, setLoading] = useState(true);
+
+  // panels
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [gridEnabled, setGridEnabled] = useState(true);
 
-  // Presence is a UI hint for now; wire to server presence later
+  // chat state
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [connected, setConnected] = useState(false);
+  const [activeUsers, setActiveUsers] = useState([]);
   const [userCount, setUserCount] = useState(1);
+  const [isTyping, setIsTyping] = useState(null); // who is typing
 
-  // Access CanvasBoard methods (undo/redo/save/export)
+  // refs
+  const socketRef = useRef(null);
+  const [socketState, setSocketState] = useState(null);
   const canvasBoardRef = useRef(null);
+  const chatEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
-  // quick palette
+  // quick palette (simple defaults)
   const colors = ["#000000", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#6D94C5"];
 
-  // Keyboard shortcuts (skip when typing in inputs)
+  // load whiteboard (title + elements) once we have id
+  useEffect(() => {
+    const loadWhiteboard = async () => {
+      if (!whiteboardId) {
+        navigate("/dashboard");
+        return;
+      }
+
+      try {
+        setLoading(true);
+        const token = session?.access_token;
+        const res = await fetch(`${API_URL}/api/whiteboards/${whiteboardId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+
+        if (!res.ok) throw new Error("Failed to load whiteboard");
+
+        const data = await res.json();
+        setWhiteboardTitle(data.whiteboard?.title || "Untitled Whiteboard");
+
+        // draw saved elements to canvas (defensive)
+        if (Array.isArray(data.elements) && data.elements.length > 0) {
+          canvasBoardRef.current?.loadElements(data.elements);
+        }
+      } catch (err) {
+        console.error("Load whiteboard error:", err);
+        alert("Failed to load whiteboard. Redirecting to dashboard...");
+        navigate("/dashboard");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadWhiteboard();
+  }, [whiteboardId, session, navigate]);
+
+  // Socket.IO setup + room join
+  useEffect(() => {
+    if (!session?.access_token) {
+      setConnected(false);
+      return;
+    }
+
+    const token = session.access_token;
+
+    // connect (auth passed via handshake)
+    const socket = io(API_URL, {
+      transports: ["websocket", "polling"],
+      auth: { token },
+    });
+    socketRef.current = socket;
+    setSocketState(socket);
+
+    socket.on("connect", () => {
+      setConnected(true);
+      socket.emit("join", { roomId: whiteboardId }); // join room
+    });
+
+    socket.on("disconnect", () => {
+      setConnected(false);
+      setSocketState(null);
+    });
+
+    // room meta (user count, list)
+    socket.on("room-info", ({ userCount: count, users }) => {
+      if (typeof count === "number") setUserCount(count);
+      if (Array.isArray(users)) setActiveUsers(users);
+    });
+
+    // chat messages
+    socket.on("chatMessage", (msg) => {
+      if (!msg || typeof msg !== "object") return;
+      setChatMessages((prev) => [...prev, msg]);
+    });
+
+    // typing indicator
+    socket.on("typing", ({ userName, isTyping }) => {
+      if (isTyping) {
+        setIsTyping(userName || "Someone");
+        clearTimeout(typingTimeoutRef.current);
+        // auto clear after 2s (optimized using ChatGPT)
+        typingTimeoutRef.current = setTimeout(() => setIsTyping(null), 2000);
+      } else {
+        setIsTyping(null);
+      }
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Socket connect error:", err?.message || err);
+      setConnected(false);
+    });
+
+    return () => {
+      clearTimeout(typingTimeoutRef.current);
+      socket.off();
+      socket.disconnect();
+    };
+  }, [session, whiteboardId]);
+
+  // auto scroll chat down
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
+  // send chat
+  const sendChatMessage = () => {
+    const text = chatInput.trim();
+    if (!text || !socketRef.current?.connected) return;
+
+    socketRef.current.emit("chatMessage", { roomId: whiteboardId, text });
+    setChatInput("");
+    socketRef.current.emit("typing", { roomId: whiteboardId, isTyping: false });
+  };
+
+  // typing
+  const handleChatInput = (e) => {
+    const value = e.target.value;
+    setChatInput(value);
+    if (!socketRef.current?.connected) return;
+    socketRef.current.emit("typing", {
+      roomId: whiteboardId,
+      isTyping: value.length > 0,
+    });
+  };
+
+  // keyboard shortcuts (common drawing hotkeys)
   useEffect(() => {
     const handleKeyDown = (e) => {
       const tag = e.target?.tagName;
@@ -36,7 +188,7 @@ export default function Whiteboard() {
           setSelectedTool("rectangle");
           break;
         case "c":
-          if (!e.ctrlKey && !e.metaKey) setSelectedTool("circle"); // don’t steal copy
+          if (!e.ctrlKey && !e.metaKey) setSelectedTool("circle");
           break;
         case "l":
           setSelectedTool("line");
@@ -47,7 +199,9 @@ export default function Whiteboard() {
         case "z":
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
-            e.shiftKey ? canvasBoardRef.current?.redo() : canvasBoardRef.current?.undo();
+            e.shiftKey
+              ? canvasBoardRef.current?.redo()
+              : canvasBoardRef.current?.undo();
           }
           break;
         case "y":
@@ -58,7 +212,7 @@ export default function Whiteboard() {
           break;
         case "s":
           if (e.ctrlKey || e.metaKey) {
-            e.preventDefault(); // take over browser Save dialog
+            e.preventDefault();
             canvasBoardRef.current?.save();
           }
           break;
@@ -81,88 +235,138 @@ export default function Whiteboard() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Presence hook placeholder (will listen to CanvasBoard/Socket context)
-  useEffect(() => {
-    // TODO(Tatiana): subscribe to presence events (e.g., window.addEventListener('wb:presence', ...))
-    // or lift the socket into context so this component can read user counts directly.
-  }, []);
-
-  // simple load (for now relies on page reload)
+  // load from localStorage (manual trigger)
   const handleLoad = () => {
-    const saved = localStorage.getItem("whiteboard-save");
+    const saved = localStorage.getItem(`whiteboard-save-${whiteboardId}`);
     if (saved) {
-      // TODO(Tatiana): expose canvasBoardRef.current.load(dataURL) to avoid full reload
-      window.location.reload();
+      canvasBoardRef.current?.loadFromDataURL(saved);
     } else {
-      alert("No saved board found!");
+      alert("No saved board found.");
     }
   };
 
+  // share session id
+  const shareSessionId = () => {
+    navigator.clipboard
+      .writeText(whiteboardId)
+      .then(() => {
+        alert(
+          `Session ID copied to clipboard: ${whiteboardId}\nShare this ID with others to collaborate!`
+        );
+      })
+      .catch(() => {
+        alert(
+          `Session ID: ${whiteboardId}\nShare this ID with others to collaborate!`
+        );
+      });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading whiteboard...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-[calc(100vh-7.5rem)] flex flex-col bg-gray-50">
-      {/* toolbar */}
+    <div className="min-h-[600px] h-full flex flex-col bg-gray-50 rounded-lg overflow-hidden shadow-lg">
+      {/* Top toolbar */}
       <div className="bg-white border-b shadow-sm p-3">
         <div className="flex items-center justify-between gap-4 flex-wrap">
-          {/* drawing tools */}
+          {/* title + back */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate("/dashboard")}
+              className="p-2 rounded hover:bg-gray-100 text-gray-600"
+              title="Back to Dashboard"
+            >
+              <i className="fa-solid fa-arrow-left"></i>
+            </button>
+            <div>
+              <h2 className="font-semibold text-lg text-gray-800">
+                {whiteboardTitle}
+              </h2>
+              <p className="text-xs text-gray-500 font-mono">
+                Session: {whiteboardId}
+              </p>
+            </div>
+          </div>
+
+          {/* tools */}
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 bg-cream rounded-lg p-1">
               <button
                 onClick={() => setSelectedTool("pen")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "pen" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "pen"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Pen (P)"
-                aria-label="Pen"
               >
                 <i className="fa-solid fa-pencil" />
               </button>
+
               <button
                 onClick={() => setSelectedTool("eraser")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "eraser" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "eraser"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Eraser (E)"
-                aria-label="Eraser"
               >
                 <i className="fa-solid fa-eraser" />
               </button>
+
               <button
                 onClick={() => setSelectedTool("rectangle")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "rectangle" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "rectangle"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Rectangle (R)"
-                aria-label="Rectangle"
               >
                 <i className="fa-regular fa-square" />
               </button>
+
               <button
                 onClick={() => setSelectedTool("circle")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "circle" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "circle"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Circle (C)"
-                aria-label="Circle"
               >
                 <i className="fa-regular fa-circle" />
               </button>
+
               <button
                 onClick={() => setSelectedTool("line")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "line" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "line"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Line (L)"
-                aria-label="Line"
               >
                 <i className="fa-solid fa-slash" />
               </button>
+
               <button
                 onClick={() => setSelectedTool("text")}
                 className={`p-2 rounded transition-all duration-200 ${
-                  selectedTool === "text" ? "bg-primary text-white shadow-md scale-105" : "hover:bg-light-blue text-gray-700"
+                  selectedTool === "text"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
                 }`}
                 title="Text (T)"
-                aria-label="Text"
               >
                 <i className="fa-solid fa-font" />
               </button>
@@ -170,7 +374,7 @@ export default function Whiteboard() {
 
             {/* colors */}
             <div className="flex items-center gap-1 bg-cream rounded-lg p-2">
-              <i className="fa-solid fa-palette text-gray-600 mr-1" aria-hidden="true" />
+              <i className="fa-solid fa-palette text-gray-600 mr-1" />
               {colors.map((c) => (
                 <button
                   key={c}
@@ -180,7 +384,6 @@ export default function Whiteboard() {
                   }`}
                   style={{ backgroundColor: c }}
                   title={`Color: ${c}`}
-                  aria-label={`Set color ${c}`}
                 />
               ))}
               <input
@@ -189,9 +392,7 @@ export default function Whiteboard() {
                 onChange={(e) => setColor(e.target.value)}
                 className="w-6 h-6 rounded cursor-pointer hover:scale-110 transition-transform"
                 title="Custom Color"
-                aria-label="Custom color"
               />
-              {/* TODO(Tatiana): debounce color picker on touch; drag can spam change events */}
             </div>
 
             {/* stroke size */}
@@ -201,10 +402,10 @@ export default function Whiteboard() {
                 className="text-gray-600 hover:text-primary transition-colors disabled:opacity-50"
                 disabled={strokeWidth <= 1}
                 title="Decrease Size"
-                aria-label="Decrease stroke"
               >
                 <i className="fa-solid fa-minus" />
               </button>
+
               <div className="flex items-center gap-1">
                 <div
                   className="w-4 h-4 rounded-full bg-current"
@@ -213,16 +414,17 @@ export default function Whiteboard() {
                     height: `${Math.min(16, strokeWidth * 2)}px`,
                     backgroundColor: color,
                   }}
-                  aria-hidden="true"
                 />
-                <span className="text-sm font-medium w-8 text-center">{strokeWidth}px</span>
+                <span className="text-sm font-medium w-8 text-center">
+                  {strokeWidth}px
+                </span>
               </div>
+
               <button
                 onClick={() => setStrokeWidth((v) => Math.min(20, v + 1))}
                 className="text-gray-600 hover:text-primary transition-colors disabled:opacity-50"
                 disabled={strokeWidth >= 20}
                 title="Increase Size"
-                aria-label="Increase stroke"
               >
                 <i className="fa-solid fa-plus" />
               </button>
@@ -236,7 +438,6 @@ export default function Whiteboard() {
                 onClick={() => canvasBoardRef.current?.undo()}
                 className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
                 title="Undo (Ctrl+Z)"
-                aria-label="Undo"
               >
                 <i className="fa-solid fa-rotate-left" />
               </button>
@@ -244,7 +445,6 @@ export default function Whiteboard() {
                 onClick={() => canvasBoardRef.current?.redo()}
                 className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
                 title="Redo (Ctrl+Y)"
-                aria-label="Redo"
               >
                 <i className="fa-solid fa-rotate-right" />
               </button>
@@ -260,7 +460,6 @@ export default function Whiteboard() {
               }}
               className="p-2 rounded hover:bg-red-100 text-red-600 transition-colors"
               title="Clear Board"
-              aria-label="Clear board"
             >
               <i className="fa-solid fa-trash" />
             </button>
@@ -272,7 +471,6 @@ export default function Whiteboard() {
                 onClick={() => canvasBoardRef.current?.save()}
                 className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
                 title="Save Board"
-                aria-label="Save board"
               >
                 <i className="fa-solid fa-floppy-disk" />
               </button>
@@ -280,7 +478,6 @@ export default function Whiteboard() {
                 onClick={handleLoad}
                 className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
                 title="Load Board"
-                aria-label="Load board"
               >
                 <i className="fa-solid fa-folder-open" />
               </button>
@@ -288,14 +485,20 @@ export default function Whiteboard() {
                 onClick={() => canvasBoardRef.current?.exportPNG()}
                 className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
                 title="Export as PNG"
-                aria-label="Export as PNG"
               >
                 <i className="fa-solid fa-file-export" />
               </button>
-              {/* TODO(Tatiana): add SVG export (nice for docs) */}
             </div>
 
             <div className="w-px h-6 bg-gray-300" />
+
+            <button
+              onClick={shareSessionId}
+              className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
+              title="Share Session ID"
+            >
+              <i className="fa-solid fa-share-nodes" />
+            </button>
 
             <button
               onClick={() => setShowChat((v) => !v)}
@@ -303,18 +506,19 @@ export default function Whiteboard() {
                 showChat ? "bg-primary text-white" : "hover:bg-light-blue text-gray-700"
               }`}
               title="Toggle Chat"
-              aria-label="Toggle chat"
             >
               <i className="fa-solid fa-comments" />
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              {chatMessages.length > 0 && !showChat && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              )}
             </button>
+
             <button
               onClick={() => setShowSettings((v) => !v)}
               className={`p-2 rounded transition-colors ${
                 showSettings ? "bg-primary text-white" : "hover:bg-light-blue text-gray-700"
               }`}
               title="Settings"
-              aria-label="Open settings"
             >
               <i className="fa-solid fa-gear" />
             </button>
@@ -325,13 +529,16 @@ export default function Whiteboard() {
         <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              Connected
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  connected ? "bg-green-500" : "bg-gray-400"
+                }`}
+              />
+              {connected ? "Connected" : "Offline"}
             </span>
             <span className="flex items-center gap-1">
               <i className="fa-solid fa-users" />
               {userCount} {userCount === 1 ? "user" : "users"} online
-              {/* TODO(Tatiana): swap to real presence once rooms are live */}
             </span>
           </div>
           <div className="flex items-center gap-4">
@@ -364,78 +571,142 @@ export default function Whiteboard() {
         </div>
       </div>
 
-      {/* main */}
-      <div className="flex-1 relative flex">
+      {/* content */}
+      <div className="flex-1 relative flex min-h-[400px]">
         {/* canvas */}
         <CanvasBoard
           ref={canvasBoardRef}
           selectedTool={selectedTool}
           color={color}
           strokeWidth={strokeWidth}
-          // TODO(Tatiana): pass gridEnabled down once CanvasBoard toggles the grid layer
-          // gridEnabled={gridEnabled}
-          // TODO(Tatiana): when rooms exist, pass whiteboardId/userId so CanvasBoard can join
+          whiteboardId={whiteboardId}
+          socket={socketState}
+          gridEnabled={gridEnabled}
         />
 
-        {/* chat shell (Socket wiring later) */}
+        {/* chat panel */}
         {showChat && (
-          <div className="w-80 bg-white border-l shadow-lg flex flex-col animate-in slide-in-from-right">
+          <div className="w-80 bg-white border-l shadow-lg flex flex-col">
             <div className="p-3 border-b bg-cream flex justify-between items-center">
-              <h3 className="font-semibold text-gray-700">Chat</h3>
+              <div>
+                <h3 className="font-semibold text-gray-700">Chat</h3>
+                {isTyping && (
+                  <p className="text-xs text-gray-500">{isTyping} is typing...</p>
+                )}
+              </div>
               <button
                 onClick={() => setShowChat(false)}
                 className="text-gray-500 hover:text-gray-700"
-                aria-label="Close chat"
               >
                 <i className="fa-solid fa-times" />
               </button>
             </div>
+
             <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
-              <div className="space-y-3">
+              {chatMessages.length === 0 ? (
                 <div className="text-gray-500 text-sm text-center py-8">
-                  <i className="fa-regular fa-comments text-3xl mb-2" />
                   <p>No messages yet</p>
-                  <p className="text-xs mt-1">Start a conversation!</p>
+                  <p className="text-xs mt-1">Start a conversation.</p>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-3">
+                  {chatMessages.map((msg, idx) => {
+                    if (msg.type === "system") {
+                      return (
+                        <div key={idx} className="text-center text-xs text-gray-500 py-1">
+                          {msg.text}
+                        </div>
+                      );
+                    }
+
+                    const self =
+                      session?.user?.user_metadata?.display_name ||
+                      session?.user?.email;
+                    const isOwn = msg.user === self;
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex ${isOwn ? "justify-end" : "justify-start"}`}
+                      >
+                        <div
+                          className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                            isOwn
+                              ? "bg-primary text-white"
+                              : "bg-white border border-gray-200"
+                          }`}
+                        >
+                          <div
+                            className={`text-xs font-semibold mb-1 ${
+                              isOwn ? "text-blue-100" : "text-primary"
+                            }`}
+                          >
+                            {msg.user}
+                          </div>
+                          <div className="text-sm break-words">{msg.text}</div>
+                          <div
+                            className={`text-xs mt-1 ${
+                              isOwn ? "text-blue-100" : "text-gray-400"
+                            }`}
+                          >
+                            {msg.timestamp
+                              ? new Date(msg.timestamp).toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : ""}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={chatEndRef} />
+                </div>
+              )}
             </div>
+
             <div className="p-3 border-t bg-white">
               <div className="flex gap-2">
                 <input
                   type="text"
+                  value={chatInput}
+                  onChange={handleChatInput}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChatMessage();
+                    }
+                  }}
                   placeholder="Type a message..."
                   className="flex-1 px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                  onKeyDown={(e) => e.key === "Enter" && console.log("Send message")}
-                  aria-label="Chat message"
                 />
                 <button
-                  className="px-4 py-2 bg-primary text-white rounded-lg hover:opacity-90 transition-opacity"
-                  aria-label="Send message"
+                  onClick={sendChatMessage}
+                  className="px-4 py-2 bg-primary text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                  disabled={!chatInput.trim() || !connected}
                 >
-                  <i className="fa-solid fa-paper-plane" />
+                  Send
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* settings */}
+        {/* settings panel */}
         {showSettings && (
           <div className="absolute inset-0 bg-black bg-opacity-20 flex items-start justify-end p-4 z-20">
-            <div className="w-80 bg-white rounded-lg shadow-xl p-4 mt-16 animate-in slide-in-from-top">
+            <div className="w-80 bg-white rounded-lg shadow-xl p-4 mt-16">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold text-gray-700 text-lg">Settings</h3>
                 <button
                   onClick={() => setShowSettings(false)}
                   className="text-gray-500 hover:text-gray-700 transition-colors"
-                  aria-label="Close settings"
                 >
                   <i className="fa-solid fa-times" />
                 </button>
               </div>
 
               <div className="space-y-4">
-                {/* board */}
                 <div>
                   <h4 className="text-sm font-medium text-gray-600 mb-2">Board</h4>
                   <div className="space-y-2">
@@ -451,15 +722,42 @@ export default function Whiteboard() {
                     <label className="flex items-center gap-2">
                       <input type="checkbox" defaultChecked className="rounded" />
                       <span className="text-sm">Auto-save enabled</span>
-                      {/* TODO(Tatiana): add an autosave interval that calls save silently */}
                     </label>
                   </div>
                 </div>
 
-                {/* shortcuts */}
                 <div>
-                  <h4 className="text-sm font-medium text-gray-600 mb-2">Keyboard Shortcuts</h4>
-                  <div className="text-xs space-y-1 text-gray-500">
+                  <h4 className="text-sm font-medium text-gray-600 mb-2">
+                    Session Info
+                  </h4>
+                  <div className="bg-gray-50 p-3 rounded-lg text-xs">
+                    <div className="mb-2">
+                      <span className="font-medium">Session ID:</span>
+                      <div className="font-mono mt-1 break-all">{whiteboardId}</div>
+                    </div>
+                    <div>
+                      <span className="font-medium">Active Users:</span>
+                      <ul className="mt-1 space-y-1">
+                        {activeUsers.length === 0 ? (
+                          <li className="text-gray-500">No user list available</li>
+                        ) : (
+                          activeUsers.map((user, idx) => (
+                            <li key={idx} className="flex items-center gap-1">
+                              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                              {user.userName}
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-medium text-gray-600 mb-2">
+                    Keyboard Shortcuts
+                  </h4>
+                  <div className="text-xs space-y-1 text-gray-500 max-h-40 overflow-y-auto">
                     <KbRow v="Pen" k="P" />
                     <KbRow v="Eraser" k="E" />
                     <KbRow v="Rectangle" k="R" />
@@ -467,7 +765,7 @@ export default function Whiteboard() {
                     <KbRow v="Line" k="L" />
                     <KbRow v="Text" k="T" />
                     <KbRow v="Undo" k="Ctrl+Z" />
-                    <KbRow v="Redo" k="Ctrl+Y / Shift+Ctrl+Z" />
+                    <KbRow v="Redo" k="Ctrl+Y" />
                     <KbRow v="Save" k="Ctrl+S" />
                     <KbRow v="Decrease Size" k="[" />
                     <KbRow v="Increase Size" k="]" />
@@ -475,11 +773,10 @@ export default function Whiteboard() {
                   </div>
                 </div>
 
-                {/* about */}
                 <div>
                   <h4 className="text-sm font-medium text-gray-600 mb-2">About</h4>
                   <p className="text-xs text-gray-500">
-                    Real-time Collaborative Whiteboard v1.0
+                    Real-time Collaborative Whiteboard v1.1
                     <br />
                     CPSC449 Project
                   </p>
@@ -493,7 +790,7 @@ export default function Whiteboard() {
   );
 }
 
-// tiny helper for shortcuts list
+// tiny helper for the shortcuts list
 function KbRow({ k, v }) {
   return (
     <div className="flex justify-between">
