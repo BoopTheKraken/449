@@ -96,8 +96,8 @@ export default function Layout() {
         </div>
 
         {/* main content */}
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-7xl p-4 md:p-6">
+        <main className={location.pathname.startsWith('/whiteboard') ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
+          <div className={location.pathname.startsWith('/whiteboard') ? 'h-full' : 'mx-auto max-w-7xl p-4 md:p-6'}>
             <Outlet />
           </div>
         </main>

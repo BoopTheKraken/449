@@ -1,13 +1,12 @@
-// server.js
 // express + socket.io whiteboard server
 // notes: auth is handled via Supabase JWT on sockets; HTTP uses middleware in routes.
-// todo (later): verify room access server-side on join (owner/member/invite), not just trust the client.
 
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const path = require('path');
 require('dotenv').config();
 
 // optional redis (cache)
@@ -24,11 +23,30 @@ const app = express();
 // middleware
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+
+      // If FRONTEND_URL is *, allow all origins (development mode)
+      if (process.env.FRONTEND_URL === '*') {
+        return callback(null, true);
+      }
+
+      // Otherwise, check if origin matches FRONTEND_URL
+      const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+      if (origin === allowedOrigin) {
+        return callback(null, true);
+      }
+
+      callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
   })
 );
 app.use(express.json());
+
+// serve frontend static files
+app.use(express.static(path.join(__dirname, '../frontend/build')));
 
 // health
 app.get('/health', (req, res) => {
@@ -43,11 +61,17 @@ app.get('/health', (req, res) => {
 // ==================== API ROUTES ====================
 
 // note: no /api/auth; frontend uses Supabase
+// haven't yet added actual api routes outside of connections
 
 app.use('/api/whiteboards', require('./routes/whiteboards'));
 app.use('/api/invitations', require('./routes/invitations'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/exports', require('./routes/exports'));
+
+// serve React app for all other routes (must be after API routes)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/build', 'index.html'));
+});
 
 // ==================== SERVER SETUP ====================
 
@@ -56,7 +80,23 @@ const server = http.createServer(app);
 // socket.io
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      // Allow requests with no origin
+      if (!origin) return callback(null, true);
+
+      // If FRONTEND_URL is *, allow all origins (development mode)
+      if (process.env.FRONTEND_URL === '*') {
+        return callback(null, true);
+      }
+
+      // Otherwise, check if origin matches FRONTEND_URL
+      const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:3000';
+      if (origin === allowedOrigin) {
+        return callback(null, true);
+      }
+
+      callback(null, false);
+    },
     credentials: true,
   },
   transports: ['websocket', 'polling'],
@@ -105,7 +145,7 @@ io.use(async (socket, next) => {
   }
 });
 
-// ==================== SOCKET.IO HANDLERS ====================
+// ============== SOCKET.IO HANDLERS =============
 
 const { Whiteboard, ChatMessage, Activity, Element } = require('./models');
 
@@ -115,11 +155,14 @@ io.on('connection', (socket) => {
   // join whiteboard room
   socket.on('join', async ({ roomId }) => {
     try {
+      console.log(`[Join] ${socket.userName} (${socket.id}) attempting to join room: ${roomId}`);
       if (!roomId || typeof roomId !== 'string') {
+        console.log('[Join] Invalid room id');
         return socket.emit('error', { message: 'Invalid room id' });
       }
 
       socket.join(roomId);
+      console.log(`[Join] ${socket.userName} successfully joined room ${roomId}`);
 
       if (!mongoose.Types.ObjectId.isValid(roomId)) {
         // not a db-backed board (preview etc.)
@@ -147,6 +190,7 @@ io.on('connection', (socket) => {
       });
 
       const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+      console.log(`[Join] Room ${roomId} now has ${roomSize} users`);
       io.to(roomId).emit('room-info', { userCount: roomSize, roomId });
 
       // send cached canvas state to the joiner
@@ -202,7 +246,7 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('shape', payload);
   });
 
-  // text
+  // text (finalized)
   socket.on('text', (payload = {}) => {
     const { roomId } = payload;
     if (!roomId) return;
@@ -211,6 +255,73 @@ io.on('connection', (socket) => {
     state.push({ type: 'text', ...payload });
 
     socket.to(roomId).emit('text', payload);
+  });
+
+  // text typing (real-time, not saved to state)
+  socket.on('text-typing', (payload = {}) => {
+    const { roomId } = payload;
+    if (!roomId) return;
+
+    // Broadcast typing state to others with userId for tracking
+    socket.to(roomId).emit('text-typing', {
+      ...payload,
+      userId: socket.userId,
+    });
+  });
+
+  // text finalized (clear typing indicator)
+  socket.on('text-finalized', (payload = {}) => {
+    const { roomId } = payload;
+    if (!roomId) return;
+
+    socket.to(roomId).emit('text-finalized', {
+      userId: socket.userId,
+    });
+  });
+
+  // fill (paint bucket)
+  socket.on('fill', (payload = {}) => {
+    console.log(`[Fill] Received from ${socket.userName}:`, payload);
+    const { roomId } = payload;
+    if (!roomId) {
+      console.log('[Fill] No roomId, ignoring');
+      return;
+    }
+
+    const state = getCanvasState(roomId);
+    state.push({ type: 'fill', ...payload });
+
+    console.log(`[Fill] Broadcasting to room ${roomId}`);
+    socket.to(roomId).emit('fill', payload);
+    console.log(`[Fill] Broadcast complete`);
+  });
+
+  // selection cut (clear area when user cuts selection)
+  socket.on('selection-cut', (payload = {}) => {
+    console.log(`[Selection Cut] Received from ${socket.userName}:`, payload);
+    const { roomId } = payload;
+    if (!roomId) {
+      console.log('[Selection Cut] No roomId, ignoring');
+      return;
+    }
+
+    const state = getCanvasState(roomId);
+    state.push({ type: 'selection-cut', ...payload });
+
+    console.log(`[Selection Cut] Broadcasting to room ${roomId}`);
+    socket.to(roomId).emit('selection-cut', payload);
+    console.log(`[Selection Cut] Broadcast complete`);
+  });
+
+  // paste selection (cut/paste from selection tools)
+  socket.on('paste-selection', (payload = {}) => {
+    const { roomId } = payload;
+    if (!roomId) return;
+
+    const state = getCanvasState(roomId);
+    state.push({ type: 'paste-selection', ...payload });
+
+    socket.to(roomId).emit('paste-selection', payload);
   });
 
   // clear board (from client)
@@ -229,6 +340,21 @@ io.on('connection', (socket) => {
     } catch (e) {
       console.error('board-saved handler error:', e);
     }
+  });
+
+  // board snapshot sync (peer-to-peer canvas sync)
+  socket.on('board:request-sync', ({ roomId }) => {
+    if (!roomId) return;
+    // Broadcast to all other users in the room asking for a snapshot
+    socket.to(roomId).emit('board:request-sync', { roomId });
+    console.log(`${socket.userName} requested canvas sync for room ${roomId}`);
+  });
+
+  socket.on('board:load-snapshot', ({ roomId, img, bounds }) => {
+    if (!roomId || !img) return;
+    // Send the snapshot to all other users in the room
+    socket.to(roomId).emit('board:load-snapshot', { roomId, img, bounds });
+    console.log(`${socket.userName} sent canvas snapshot to room ${roomId}`);
   });
 
   // chat
@@ -285,25 +411,32 @@ io.on('connection', (socket) => {
   // disconnect
   socket.on('disconnect', async (reason) => {
     try {
-      console.log(`User disconnected: ${socket.userName} (${reason})`);
+      console.log(`User disconnected: ${socket.userName} (${socket.id}) - ${reason}`);
 
-      // rooms the socket was in
+      // rooms the socket was in (before disconnect removes them)
       const rooms = Array.from(socket.rooms).filter((r) => r !== socket.id);
+      console.log(`[Disconnect] ${socket.userName} was in rooms:`, rooms);
 
-      // remove active user entries
+      // remove active user entries from database
       await Whiteboard.updateMany(
         { 'activeUsers.socketId': socket.id },
         { $pull: { activeUsers: { socketId: socket.id } } }
       );
 
-      // notify and update counts
+      // notify and update counts for each room
       rooms.forEach((roomId) => {
+        // Notify others that user left
         socket.to(roomId).emit('user-left', {
           userId: socket.userId,
           userName: socket.userName,
         });
 
-        const roomSize = io.sockets.adapter.rooms.get(roomId)?.size || 0;
+        // Get current room size AFTER socket has disconnected
+        const room = io.sockets.adapter.rooms.get(roomId);
+        const roomSize = room?.size || 0;
+        console.log(`[Disconnect] Room ${roomId} now has ${roomSize} users`);
+
+        // Broadcast updated count to remaining users
         io.to(roomId).emit('room-info', { userCount: roomSize, roomId });
       });
     } catch (err) {
@@ -334,7 +467,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// ==================== CLEANUP JOBS ====================
+// =============== CLEANUP JOBS ==============
 
 // stale connections (5 min)
 setInterval(async () => {
@@ -398,17 +531,10 @@ connectDB().then(() => {
     console.log(`Supabase Auth: Enabled`);
     console.log(`Canvas Sync: Enabled`);
     console.log('='.repeat(50));
-    console.log('API Routes:');
-    console.log('   /api/whiteboards');
-    console.log('   /api/invitations');
-    console.log('   /api/profile');
-    console.log('   /api/exports');
-    console.log('='.repeat(50));
   });
 });
 
-// ==================== GRACEFUL SHUTDOWN ====================
-
+// ==================== SHUTDOWN ====================
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 

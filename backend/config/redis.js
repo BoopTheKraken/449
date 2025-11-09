@@ -7,7 +7,8 @@ const redis = new Redis(
   host: process.env.REDIS_HOST || '127.0.0.1',
   port: process.env.REDIS_PORT || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
-  retryStrategy: function (times) 
+  lazyConnect: true,
+  retryStrategy: function (times)
   {
     let delay = Math.min(times * 50, 2000)
     return delay

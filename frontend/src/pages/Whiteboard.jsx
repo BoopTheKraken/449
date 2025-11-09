@@ -3,8 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import { useAuth } from "../context/AuthContext";
 import CanvasBoard from "../components/CanvasBoard";
-
-const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
+import { API_URL } from "../utils/api";
 
 export default function Whiteboard() {
   // route
@@ -46,7 +45,8 @@ export default function Whiteboard() {
   // quick palette (simple defaults)
   const colors = ["#000000", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#6D94C5"];
 
-  // load whiteboard (title + elements) once we have id
+  // load whiteboard (title + elements + saved canvas) once we have id
+  // Note: Priority logic - compare localStorage vs server timestamps (fixed using ChatGPT)
   useEffect(() => {
     const loadWhiteboard = async () => {
       if (!whiteboardId) {
@@ -66,9 +66,54 @@ export default function Whiteboard() {
         const data = await res.json();
         setWhiteboardTitle(data.whiteboard?.title || "Untitled Whiteboard");
 
-        // draw saved elements to canvas (defensive)
-        if (Array.isArray(data.elements) && data.elements.length > 0) {
+        // Check localStorage for cached content (board-specific only)
+        const specificKey = `whiteboard-cache-${whiteboardId}`;
+        let localCache = null;
+        try {
+          const rawSpecific = localStorage.getItem(specificKey);
+          if (rawSpecific) {
+            localCache = JSON.parse(rawSpecific);
+          }
+        } catch (e) {
+          console.warn("Failed to parse localStorage cache:", e);
+        }
+
+        // Get server timestamp (from whiteboard lastModified)
+        const serverTimestamp = data.whiteboard?.lastModified
+          ? new Date(data.whiteboard.lastModified).getTime()
+          : 0;
+
+        // Get local cache timestamp
+        const localTimestamp = localCache?.ts || 0;
+
+        // Priority 1: Use localStorage if it's newer than server
+        if (localCache && localTimestamp > serverTimestamp) {
+          console.log("Loading from localStorage (newer than server)");
+          canvasBoardRef.current?.loadFromDataURL(
+            localCache.img,
+            localCache.bounds
+          );
+        }
+        // Priority 2: Load server-saved canvas image if it exists
+        else if (data.whiteboard?.canvasImage) {
+          console.log("Loading server-saved canvas image");
+          canvasBoardRef.current?.loadFromDataURL(
+            data.whiteboard.canvasImage,
+            data.whiteboard.canvasBounds
+          );
+        }
+        // Priority 3: Load individual elements if no canvas image saved (old behavior)
+        else if (Array.isArray(data.elements) && data.elements.length > 0) {
+          console.log("Loading canvas from individual elements");
           canvasBoardRef.current?.loadElements(data.elements);
+        }
+        // Priority 4: Load from localStorage even if server had nothing
+        else if (localCache) {
+          console.log("Loading from localStorage (server has no content)");
+          canvasBoardRef.current?.loadFromDataURL(
+            localCache.img,
+            localCache.bounds
+          );
         }
       } catch (err) {
         console.error("Load whiteboard error:", err);
@@ -100,7 +145,9 @@ export default function Whiteboard() {
     setSocketState(socket);
 
     socket.on("connect", () => {
+      console.log('Socket connected:', socket.id);
       setConnected(true);
+      console.log('Joining room:', whiteboardId);
       socket.emit("join", { roomId: whiteboardId }); // join room
     });
 
@@ -196,6 +243,15 @@ export default function Whiteboard() {
         case "t":
           setSelectedTool("text");
           break;
+        case "f":
+          setSelectedTool("fill");
+          break;
+        case "s":
+          setSelectedTool("select-rect");
+          break;
+        case "a":
+          setSelectedTool("lasso");
+          break;
         case "z":
           if (e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -273,9 +329,9 @@ export default function Whiteboard() {
   }
 
   return (
-    <div className="min-h-[600px] h-full flex flex-col bg-gray-50 rounded-lg overflow-hidden shadow-lg">
+    <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
       {/* Top toolbar */}
-      <div className="bg-white border-b shadow-sm p-3">
+      <div className="bg-white border-b shadow-sm p-3 flex-shrink-0">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           {/* title + back */}
           <div className="flex items-center gap-3">
@@ -369,6 +425,47 @@ export default function Whiteboard() {
                 title="Text (T)"
               >
                 <i className="fa-solid fa-font" />
+              </button>
+
+              <button
+                onClick={() => setSelectedTool("fill")}
+                className={`p-2 rounded transition-all duration-200 ${
+                  selectedTool === "fill"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
+                }`}
+                title="Fill Bucket (F)"
+              >
+                <i className="fa-solid fa-fill-drip" />
+              </button>
+            </div>
+
+            <div className="w-px h-6 bg-gray-300" />
+
+            {/* Selection tools */}
+            <div className="flex items-center gap-1 bg-cream rounded-lg p-1">
+              <button
+                onClick={() => setSelectedTool("select-rect")}
+                className={`p-2 rounded transition-all duration-200 ${
+                  selectedTool === "select-rect"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
+                }`}
+                title="Rectangular Select (S)"
+              >
+                <i className="fa-regular fa-square-dashed" />
+              </button>
+
+              <button
+                onClick={() => setSelectedTool("lasso")}
+                className={`p-2 rounded transition-all duration-200 ${
+                  selectedTool === "lasso"
+                    ? "bg-primary text-white shadow-md scale-105"
+                    : "hover:bg-light-blue text-gray-700"
+                }`}
+                title="Lasso Select (A)"
+              >
+                <i className="fa-solid fa-draw-polygon" />
               </button>
             </div>
 
@@ -555,7 +652,13 @@ export default function Whiteboard() {
                     ? "fa-circle"
                     : selectedTool === "line"
                     ? "fa-slash"
-                    : "fa-font"
+                    : selectedTool === "text"
+                    ? "fa-font"
+                    : selectedTool === "fill"
+                    ? "fa-fill-drip"
+                    : selectedTool === "select-rect"
+                    ? "fa-square-dashed"
+                    : "fa-draw-polygon"
                 }`}
               />
               {selectedTool}
@@ -572,22 +675,25 @@ export default function Whiteboard() {
       </div>
 
       {/* content */}
-      <div className="flex-1 relative flex min-h-[400px]">
+      <div className="flex-1 relative flex overflow-hidden h-full">
         {/* canvas */}
-        <CanvasBoard
-          ref={canvasBoardRef}
-          selectedTool={selectedTool}
-          color={color}
-          strokeWidth={strokeWidth}
-          whiteboardId={whiteboardId}
-          socket={socketState}
-          gridEnabled={gridEnabled}
-        />
+        <div className="flex-1 h-full w-full">
+          <CanvasBoard
+            ref={canvasBoardRef}
+            selectedTool={selectedTool}
+            color={color}
+            strokeWidth={strokeWidth}
+            whiteboardId={whiteboardId}
+            socket={socketState}
+            gridEnabled={gridEnabled}
+            sessionToken={session?.access_token}
+          />
+        </div>
 
-        {/* chat panel */}
+        {/* chat panel - overlays canvas */}
         {showChat && (
-          <div className="w-80 bg-white border-l shadow-lg flex flex-col">
-            <div className="p-3 border-b bg-cream flex justify-between items-center">
+          <div className="absolute right-0 top-0 h-[90%] w-80 bg-white border-l shadow-lg flex flex-col z-40 overflow-hidden">
+            <div className="p-3 border-b bg-cream flex justify-between items-center flex-shrink-0">
               <div>
                 <h3 className="font-semibold text-gray-700">Chat</h3>
                 {isTyping && (
@@ -602,7 +708,7 @@ export default function Whiteboard() {
               </button>
             </div>
 
-            <div className="flex-1 p-4 overflow-y-auto bg-gray-50">
+            <div className="flex-1 p-4 overflow-y-auto bg-gray-50 min-h-0">
               {chatMessages.length === 0 ? (
                 <div className="text-gray-500 text-sm text-center py-8">
                   <p>No messages yet</p>
@@ -665,7 +771,7 @@ export default function Whiteboard() {
               )}
             </div>
 
-            <div className="p-3 border-t bg-white">
+            <div className="p-3 border-t bg-white flex-shrink-0">
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -764,6 +870,9 @@ export default function Whiteboard() {
                     <KbRow v="Circle" k="C" />
                     <KbRow v="Line" k="L" />
                     <KbRow v="Text" k="T" />
+                    <KbRow v="Fill Bucket" k="F" />
+                    <KbRow v="Rectangle Select" k="S" />
+                    <KbRow v="Lasso Select" k="A" />
                     <KbRow v="Undo" k="Ctrl+Z" />
                     <KbRow v="Redo" k="Ctrl+Y" />
                     <KbRow v="Save" k="Ctrl+S" />

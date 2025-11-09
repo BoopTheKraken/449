@@ -1,6 +1,5 @@
 import { useState } from 'react';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_URL } from '../utils/api';
 
 export default function InviteModal({ whiteboard, session, onClose, onSuccess }) {
   const [email, setEmail] = useState('');
@@ -55,12 +54,12 @@ export default function InviteModal({ whiteboard, session, onClose, onSuccess })
         // Copy invite URL to clipboard
         try {
           await navigator.clipboard.writeText(data.inviteUrl);
-          alert(`✅ Invitation sent to ${email}!\n\nInvite link copied to clipboard:\n${data.inviteUrl}`);
+          alert(`Invitation sent to ${email}!\n\nInvite link copied to clipboard:\n${data.inviteUrl}`);
         } catch {
-          alert(`✅ Invitation sent to ${email}!\n\nInvite link:\n${data.inviteUrl}`);
+          alert(`Invitation sent to ${email}!\n\nInvite link:\n${data.inviteUrl}`);
         }
       } else {
-        alert(`✅ Invitation sent to ${email}!`);
+        alert(`Invitation sent to ${email}!`);
       }
 
       onSuccess?.();

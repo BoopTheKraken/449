@@ -1,8 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_URL } from '../utils/api';
 const linkBase = "flex items-center gap-3 rounded-xl px-3 py-2 text-sm transition-colors";
 
 export default function SideNav({ onNavigate }) {

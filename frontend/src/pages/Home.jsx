@@ -34,7 +34,7 @@ export default function Home() {
                             Insert intro into the collaborating whiteboard text here....
                             draw and collaborate with your team and friends.
                         </p>
-                        <div classNmae="flex flex-col sm:flex-row gap-4 justify-center">
+                        <div className="flex flex-col sm:flex-row gap-4 justify-center">
                             <Link
                             to="/register"
                             className="px-8 py-4 rounded-lg text-white font-semibold text-lg transition-transform hover:scale-105 shadow-lg bg-primary-blue">

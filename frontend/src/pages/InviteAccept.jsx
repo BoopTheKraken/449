@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_URL } from '../utils/api';
 
 export default function InviteAccept() {
   const { token } = useParams();
