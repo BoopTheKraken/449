@@ -8,6 +8,7 @@ import { API_URL } from "../utils/api";
 export default function Whiteboard() {
   // route
   const { id: whiteboardId } = useParams();
+  const { id: userId } = useParams();
   const navigate = useNavigate();
 
   // auth
@@ -163,9 +164,24 @@ export default function Whiteboard() {
     });
 
     // chat messages
-    socket.on("chatMessage", (msg) => {
+    socket.on("chatMessage", async (msg) => {
       if (!msg || typeof msg !== "object") return;
       setChatMessages((prev) => [...prev, msg]);
+
+      try {
+        const { data, error } = await supabase
+        .from('Chat_Messages')
+        .insert({
+          user_id: msg.userId,
+          whiteboard_id: whiteboardId,
+          message: msg.message
+        })
+        if (error) {
+          console.error('Error saving message:', error)
+        }
+      } catch (error) {
+        console.error('Exception', error)
+      }
     });
 
     // typing indicator
