@@ -64,19 +64,6 @@ export default function Register() {
           <p className="text-gray-600 mt-2">Join our collaborative whiteboard</p>
         </div>
 
-        {/* Demo-only notice */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-2">
-            <i className="fa-solid fa-flask text-yellow-600 mt-0.5" aria-hidden="true"></i>
-            <div>
-              <p className="text-yellow-800 font-medium text-sm">Demo Mode Active</p>
-              <p className="text-yellow-700 text-xs mt-1">
-                Registration is disabled in the mock. Use the test accounts from the Login page.
-              </p>
-            </div>
-          </div>
-        </div>
-
         {error && (
           <div
             role="alert"
@@ -87,12 +74,10 @@ export default function Register() {
           </div>
         )}
 
-        {/* Form is disabled in demo; keep structure for future enablement */}
         <form
           onSubmit={handleRegister}
-          className="space-y-4 opacity-60 pointer-events-none"
+          className="space-y-4"
           noValidate
-          aria-disabled="true"
         >
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
@@ -107,8 +92,8 @@ export default function Register() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg bg-gray-50"
+                required
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
                 placeholder="your.email@example.com"
               />
             </div>
@@ -127,9 +112,9 @@ export default function Register() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                disabled
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg bg-gray-50"
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                required
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                placeholder="************"
               />
             </div>
           </div>
@@ -147,21 +132,21 @@ export default function Register() {
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                disabled
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg bg-gray-50"
-                placeholder="â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢"
+                required
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent"
+                placeholder="************"
               />
             </div>
           </div>
 
           <button
             type="submit"
-            disabled
-            className="btn btn-primary w-full opacity-50 cursor-not-allowed"
+            disabled={loading}
+            className="btn btn-primary w-full"
             aria-busy={loading ? "true" : "false"}
           >
             <i className="fa-solid fa-user-plus mr-2" aria-hidden="true"></i>
-            Sign Up (Disabled in Demo)
+            {loading ? "Creating Account..." : "Sign Up"}
           </button>
         </form>
 
