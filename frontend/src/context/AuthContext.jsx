@@ -5,7 +5,7 @@ const AuthContext = createContext(null);
 
 // local mock users (fallback if Supabase is down)
 const MOCK_USERS = [
-  { id: "2ae7a48e-052c-484a-9931-d38ccb6a5e5c", email: "alice@test.com", password: "password123", displayName: "Alice" },
+  { id: "2ae7a48e-052c-484a-9931-d38ccb6a5e5c", email: "alice@test.com", password: "password1234", displayName: "Alice" },
   { id: "user-2", email: "bob@test.com", password: "password123", displayName: "Bob" },
 ];
 
@@ -76,21 +76,27 @@ export const AuthContextProvider = ({ children }) => {
     return () => sub.subscription?.unsubscribe?.();
   }, [useMock]);
 
+  // Helper function for mock login (bug found and fix suggested by ChatGPT)
+  // fixes infinite login loop when Supabase fails
+  const mockSignIn = (email, password) => {
+    return new Promise((resolve, reject) => {
+      setTimeout(() => {
+        const user = MOCK_USERS.find((u) => u.email === email && u.password === password);
+        if (!user) {
+          return reject({ data: null, error: { message: "Invalid email or password" } });
+        }
+        const s = { user: { id: user.id, email: user.email, displayName: user.displayName } };
+        setSession(s);
+        localStorage.setItem("mock-user", JSON.stringify(s.user));
+        resolve({ data: s, error: null });
+      }, MOCK_LOGIN_DELAY_MS);
+    });
+  };
+
   // sign in
   const signIn = async (email, password) => {
     if (useMock) {
-      return new Promise((resolve, reject) => {
-        setTimeout(() => {
-          const user = MOCK_USERS.find((u) => u.email === email && u.password === password);
-          if (!user) {
-            return reject({ data: null, error: { message: "Invalid email or password" } });
-          }
-          const s = { user: { id: user.id, email: user.email, displayName: user.displayName } };
-          setSession(s);
-          localStorage.setItem("mock-user", JSON.stringify(s.user));
-          resolve({ data: s, error: null });
-        }, MOCK_LOGIN_DELAY_MS);
-      });
+      return mockSignIn(email, password);
     }
 
     try {
@@ -99,7 +105,7 @@ export const AuthContextProvider = ({ children }) => {
         console.warn("auth: login fail, switching to mock", error.message);
         setUseMock(true);
         setSupabaseError(error.message);
-        return signIn(email, password);
+        return mockSignIn(email, password);
       }
       localStorage.removeItem("mock-user");
       return { data, error: null };
@@ -107,7 +113,7 @@ export const AuthContextProvider = ({ children }) => {
       console.error("auth: signIn error, switching to mock", e);
       setUseMock(true);
       setSupabaseError(e.message);
-      return signIn(email, password);
+      return mockSignIn(email, password);
     }
   };
 

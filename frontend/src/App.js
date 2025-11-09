@@ -12,7 +12,7 @@ import Invitations from './pages/Invitations';
 import InviteAccept from './pages/InviteAccept';
 
 import './index.css';
-import Dashboard from './pages/Dashboard';
+//import Dashboard from './pages/Dashboard';
 
 // Protected Route wrapper
 function ProtectedRoute({ children }) {

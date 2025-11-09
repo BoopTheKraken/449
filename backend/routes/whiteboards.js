@@ -47,7 +47,8 @@ router.get('/', authenticate, async (req, res) => {
 
 /**
  * GET /api/whiteboards/:id
- * fetch one whiteboard + elements + your permissions
+ * fetch one whiteboard + elements + permissions
+ * Note: Now includes canvasImage field for loading saved canvas state
  */
 router.get('/:id', authenticate, checkWhiteboardAccess, async (req, res) => {
   try {
@@ -56,7 +57,7 @@ router.get('/:id', authenticate, checkWhiteboardAccess, async (req, res) => {
       .lean();
 
     res.json({
-      whiteboard: req.whiteboard,
+      whiteboard: req.whiteboard, // includes canvasImage field now
       elements,
       permissions: {
         role: req.userRole,
@@ -123,7 +124,7 @@ router.post('/', authenticate, async (req, res) => {
 
 /**
  * PUT /api/whiteboards/:id
- * update title/status; owners can also update settings
+ * update title/status; owners/creators can also update settings
  */
 router.put(
   '/:id',
@@ -219,7 +220,7 @@ router.delete(
 
 /**
  * POST /api/whiteboards/:id/invite
- * owner invites a collaborator by email (editor|viewer)
+ * board creator invites a collaborator by email (editor|viewer)
  */
 router.post(
   '/:id/invite',
@@ -361,7 +362,7 @@ router.post(
         return res.status(400).json({ error: 'Elements array is required.' });
       }
 
-      // minimal shaping-client enforces schema
+      // minimal shaping-client enforces schema (chatGPT bug fix for runtime)
       const toSave = elements.map((el) => ({
         ...el,
         whiteboardId: req.params.id,
@@ -380,6 +381,60 @@ router.post(
     } catch (err) {
       console.error('whiteboards:elements-save error:', err);
       res.status(500).json({ error: 'Could not save elements.' });
+    }
+  }
+);
+
+/**
+ * PUT /api/whiteboards/:id/canvas
+ * Save canvas image (PNG/JPEG data URL) to database
+ * Note: Base64 validation and size limits implemented using ChatGPT
+ */
+router.put(
+  '/:id/canvas',
+  authenticate,
+  checkWhiteboardAccess,
+  requireRole('owner', 'editor'),
+  async (req, res) => {
+    try {
+      const { canvasImage, bounds } = req.body;
+
+      if (!canvasImage || typeof canvasImage !== 'string') {
+        return res.status(400).json({ error: 'Canvas image data URL is required.' });
+      }
+
+      if (!canvasImage.startsWith('data:image/png;base64,') &&
+          !canvasImage.startsWith('data:image/jpeg;base64,')) {
+        return res.status(400).json({ error: 'Invalid image format. Must be PNG or JPEG data URL.' });
+      }
+
+      // Check size limit (16MB max for MongoDB, warn if >5MB) (ChatGPT suggestion)
+      const sizeInBytes = canvasImage.length;
+      const sizeInMB = sizeInBytes / (1024 * 1024);
+
+      if (sizeInMB > 16) {
+        return res.status(413).json({ error: 'Canvas image too large (max 16MB).' });
+      }
+
+      req.whiteboard.canvasImage = canvasImage;
+      req.whiteboard.canvasBounds = bounds || null;
+      req.whiteboard.lastModified = new Date();
+      await req.whiteboard.save();
+
+      await Activity.create({
+        whiteboardId: req.whiteboard._id,
+        userId: req.userId,
+        action: 'edited',
+        details: { canvasSaved: true, imageSizeMB: sizeInMB.toFixed(2) },
+      });
+
+      res.json({
+        message: 'Canvas saved to server.',
+        sizeMB: sizeInMB.toFixed(2),
+      });
+    } catch (err) {
+      console.error('whiteboards:save-canvas error:', err);
+      res.status(500).json({ error: 'Could not save canvas image.' });
     }
   }
 );

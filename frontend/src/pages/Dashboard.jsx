@@ -2,8 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import InviteModal from '../components/InviteModal';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+import { API_URL } from '../utils/api';
 const HISTORY_LIMIT = 50; // keep list pulls small
 
 export default function Dashboard() {

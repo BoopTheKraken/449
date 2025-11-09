@@ -1,4 +1,19 @@
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+
+const getAPIUrl = () => {
+  if (process.env.REACT_APP_API_URL) {
+    return process.env.REACT_APP_API_URL;
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    return ''; // relative URLs in production
+  }
+
+  // Development: use same host as frontend but port 4000
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:4000`;
+};
+
+export const API_URL = getAPIUrl();
 
 const getToken = () => localStorage.getItem('auth-token');
 

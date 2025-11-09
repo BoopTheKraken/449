@@ -46,6 +46,16 @@ const whiteboardSchema = new mongoose.Schema({
   lastModified: {
     type: Date,
     default: Date.now
+  },
+  // Added canvasImage field to store saved canvas state (base64 PNG/JPEG data URL)
+  canvasImage: {
+    type: String,
+    default: null
+  },
+  // Bounds metadata for cropped canvas images
+  canvasBounds: {
+    type: Object,
+    default: null
   }
 }, {
   timestamps: true
