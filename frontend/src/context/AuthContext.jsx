@@ -118,7 +118,7 @@ export const AuthContextProvider = ({ children }) => {
   };
 
   // sign up
-  const signUp = async (email, password, displayName) => {
+  const signUp = async (username, password, firstName, lastName, email, phoneNumber, displayName) => {
     if (useMock) {
       return new Promise((_, reject) => {
         setTimeout(() => {
@@ -136,9 +136,16 @@ export const AuthContextProvider = ({ children }) => {
 
     try {
       const { data, error } = await supabase.auth.signUp({
-        email,
+      //const { data, error } = await supabase
+      //.from('Profiles')
+      //.insert([{ username, password, firstName, lastName, email, phoneNumber}])
+        username,
         password,
-        options: { data: { display_name: displayName } },
+        firstName,
+        lastName,
+        email,
+        phoneNumber,
+        options: { data: { display_name: displayName } }
       });
       if (error) {
         console.warn("auth: signup fail", error.message);

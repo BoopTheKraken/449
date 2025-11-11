@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { supabase } from "../config/supabaseClient";
 import { useParams, useNavigate } from "react-router-dom";
 import { io } from "socket.io-client";
 import { useAuth } from "../context/AuthContext";
@@ -8,7 +9,6 @@ import { API_URL } from "../utils/api";
 export default function Whiteboard() {
   // route
   const { id: whiteboardId } = useParams();
-  const { id: userId } = useParams();
   const navigate = useNavigate();
 
   // auth
@@ -173,9 +173,10 @@ export default function Whiteboard() {
         .from('Chat_Messages')
         .insert({
           user_id: msg.userId,
-          whiteboard_id: whiteboardId,
+          whiteboard_id: msg.whiteboardId,
           message: msg.message
         })
+        console.log(whiteboardId);
         if (error) {
           console.error('Error saving message:', error)
         }
