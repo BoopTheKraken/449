@@ -13,6 +13,7 @@ import {
   useMemo,
 } from "react";
 import { API_URL } from "../utils/api";
+import { jsPDF } from "jspdf";
 
 // Logical canvas space shared by all clients
 const VIRTUAL_WIDTH = 1920;
@@ -1351,6 +1352,57 @@ const CanvasBoard = forwardRef(function CanvasBoard(
       a.download = filename;
       a.href = canvas.toDataURL("image/png");
       a.click();
+    },
+
+     exportJPEG() {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = whiteboardId
+        ? `whiteboard-${whiteboardId}-${ts}.jpg`
+        : `whiteboard-${ts}.jpg`;
+
+      // quality 0.9 is good enough
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.9);
+
+      const a = document.createElement("a");
+      a.download = filename;
+      a.href = dataUrl;
+      a.click();
+    },
+
+    exportPDF() {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      //get png from canvas
+      const imgData = canvas.toDataURL("image/png");
+
+      //make a landscape A4 pdf
+      const pdf = new jsPDF({
+        orientation: "landscape",
+        unit: "pt",
+        format: "a4",
+      });
+
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+
+     
+      const imgWidth = pageWidth - 40; //margin
+      const imgHeight = (1080 / 1920) * imgWidth;
+
+      
+      const x = 20;
+      const y = (pageHeight - imgHeight) / 2;
+
+      pdf.addImage(imgData, "PNG", x, y, imgWidth, imgHeight);
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = whiteboardId
+        ? `whiteboard-${whiteboardId}-${ts}.pdf`
+        : `whiteboard-${ts}.pdf`;
+      pdf.save(filename);
     },
 
     loadFromDataURL(dataURL, bounds) {

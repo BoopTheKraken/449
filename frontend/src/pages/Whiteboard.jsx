@@ -585,6 +585,20 @@ export default function Whiteboard() {
               >
                 <i className="fa-solid fa-file-export" />
               </button>
+              <button
+                onClick={() => canvasBoardRef.current?.exportJPEG()}
+                className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
+                title="Export as JPEG"
+              >
+                <i className="fa-solid fa-image" />
+              </button>
+              <button
+                onClick={() => canvasBoardRef.current?.exportPDF()}
+                className="p-2 rounded hover:bg-light-blue text-gray-700 transition-colors"
+                title="Export as PDF"
+              >
+                <i className="fa-solid fa-file-pdf" />
+              </button>
             </div>
 
             <div className="w-px h-6 bg-gray-300" />
