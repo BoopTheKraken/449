@@ -163,22 +163,81 @@ export default function Whiteboard() {
       if (Array.isArray(users)) setActiveUsers(users);
     });
 
+    // get chat messages from Supabase
+    const fetchMessages = async () => {
+      try {
+        const { data, error } = await supabase
+        .from('Chat_Messages')
+        .select('*')
+        .eq('whiteboard_id', whiteboardId)
+        .order('time_stamp', { ascending: true });
+  
+        if (error) {
+          console.error('Error fetching messages: ', error);
+        }
+
+        const formattedMessages = await Promise.all(
+          data.map(async (msg) => {
+            let username = "Guest";
+
+            try {
+
+              const { data: users } = await supabase
+                .from('Users')
+                .select('username, first_name, last_name')
+                .eq('user_id', msg.user_id)
+                .single();
+
+                const full_name = users.first_name + " " + users.last_name
+                username = users?.username || full_name || users?.first_name
+            } catch (error) {
+              username = msg.user_id?.substring(0, 8) || 'Guest';
+            }
+
+            return {
+              text: msg.message,
+              user: username,
+              timestamp: msg.time_stamp,
+              type: 'message'
+          };
+      })
+    );
+
+        setChatMessages(formattedMessages);
+        } catch (error) {
+        console.error('Exception: ', error);
+      }
+    }
+  
+    if (whiteboardId) {
+      fetchMessages();
+    }
+
     // chat messages
     socket.on("chatMessage", async (msg) => {
       if (!msg || typeof msg !== "object") return;
       setChatMessages((prev) => [...prev, msg]);
 
+      // save chat messages to supabase
       try {
+        // get the current user
+        const { data: { user } } = await supabase.auth.getUser();
+
         const { data, error } = await supabase
         .from('Chat_Messages')
-        .insert({
-          user_id: msg.userId,
-          whiteboard_id: msg.whiteboardId,
-          message: msg.message
-        })
-        console.log(whiteboardId);
+        .insert([
+          { 
+            user_id: user.id,
+            whiteboard_id: whiteboardId, 
+            message: msg.text
+          }
+        ])
+
+        //console.log(whiteboardId);
         if (error) {
           console.error('Error saving message:', error)
+        } else {
+          console.log('Message saved successfully: ', data)
         }
       } catch (error) {
         console.error('Exception', error)

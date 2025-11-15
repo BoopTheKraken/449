@@ -136,16 +136,17 @@ export const AuthContextProvider = ({ children }) => {
 
     try {
       const { data, error } = await supabase.auth.signUp({
-      //const { data, error } = await supabase
-      //.from('Profiles')
-      //.insert([{ username, password, firstName, lastName, email, phoneNumber}])
-        username,
-        password,
-        firstName,
-        lastName,
-        email,
-        phoneNumber,
-        options: { data: { display_name: displayName } }
+        email: email,
+        password: password,
+        options: {
+          data: {
+            username: username,
+            firstName: firstName,
+            lastName: lastName,
+            phoneNumber: phoneNumber
+          }
+        }
+        //options: { data: { display_name: displayName } }
       });
       if (error) {
         console.warn("auth: signup fail", error.message);
