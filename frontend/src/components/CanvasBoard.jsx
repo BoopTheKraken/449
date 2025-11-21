@@ -13,6 +13,7 @@ import {
   useMemo,
 } from "react";
 import { API_URL } from "../utils/api";
+import { jsPDF } from "jspdf";
 
 // Logical canvas space shared by all clients
 const VIRTUAL_WIDTH = 1920;
@@ -1351,6 +1352,57 @@ const CanvasBoard = forwardRef(function CanvasBoard(
       a.download = filename;
       a.href = canvas.toDataURL("image/png");
       a.click();
+    },
+
+    exportJPEG() {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const a = document.createElement("a");
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = whiteboardId
+        ? `whiteboard-${whiteboardId}-${ts}.jpeg`
+        : `whiteboard-${ts}.jpeg`;
+      a.download = filename;
+      a.href = canvas.toDataURL("image/jpeg", 0.92);
+      a.click();
+    },
+
+    exportPDF() {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const dataURL = canvas.toDataURL("image/png");
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = whiteboardId
+        ? `whiteboard-${whiteboardId}-${ts}.pdf`
+        : `whiteboard-${ts}.pdf`;
+
+      const printWindow = window.open("", "_blank");
+      if (!printWindow) {
+        alert("Popup blocked. Please allow popups to export as PDF.");
+        return;
+      }
+
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>${filename}</title>
+            <style>
+              body { margin: 0; display: flex; align-items: center; justify-content: center; background: #f5f5f5; }
+              img { max-width: 100%; height: auto; }
+            </style>
+          </head>
+          <body>
+            <img src="${dataURL}" alt="Whiteboard Export" />
+            <script>
+              window.onload = function () {
+                setTimeout(function () { window.print(); }, 150);
+              };
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
     },
 
     loadFromDataURL(dataURL, bounds) {
