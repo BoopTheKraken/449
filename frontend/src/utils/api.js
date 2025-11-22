@@ -40,10 +40,10 @@ async function apiCall(endpoint, options = {}) {
 }
 
 export const auth = {
-  register: (email, password, displayName) =>
+  register: (username, password, firstName, lastName, email, phoneNumber, displayName) =>
     apiCall('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, displayName }),
+      body: JSON.stringify({ username, password, firstName, lastName, email, phoneNumber, displayName }),
     }),
 
   login: (email, password) =>

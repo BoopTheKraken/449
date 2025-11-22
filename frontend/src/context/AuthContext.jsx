@@ -5,7 +5,7 @@ const AuthContext = createContext(null);
 
 // local mock users (fallback if Supabase is down)
 const MOCK_USERS = [
-  { id: "2ae7a48e-052c-484a-9931-d38ccb6a5e5c", email: "alice@test.com", password: "password123", displayName: "Alice" },
+  { id: "2ae7a48e-052c-484a-9931-d38ccb6a5e5c", email: "alice@test.com", password: "password1234", displayName: "Alice" },
   { id: "user-2", email: "bob@test.com", password: "password123", displayName: "Bob" },
 ];
 
@@ -118,7 +118,7 @@ export const AuthContextProvider = ({ children }) => {
   };
 
   // sign up
-  const signUp = async (email, password, displayName) => {
+  const signUp = async (username, password, firstName, lastName, email, phoneNumber, displayName) => {
     if (useMock) {
       return new Promise((_, reject) => {
         setTimeout(() => {
@@ -136,9 +136,17 @@ export const AuthContextProvider = ({ children }) => {
 
     try {
       const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { display_name: displayName } },
+        email: email,
+        password: password,
+        options: {
+          data: {
+            username: username,
+            firstName: firstName,
+            lastName: lastName,
+            phoneNumber: phoneNumber
+          }
+        }
+        //options: { data: { display_name: displayName } }
       });
       if (error) {
         console.warn("auth: signup fail", error.message);
