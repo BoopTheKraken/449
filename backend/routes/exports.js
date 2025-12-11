@@ -14,14 +14,14 @@ const QUOTA_LIMIT = 10; // per 24h window
 
 // helpers
 function parseLimit(raw, fallback = 50, max = 100) {
-  // parse "limit" safely and clamp to sane bounds (optimized using ChatGPT)
+  // parse "limit" safely and clamp to sane bounds (found during troubleshooting with ChatGPT)
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return fallback;
   return Math.min(n, max);
 }
 
 function validateExportOptions(format, options = {}) {
-  // normalize per-format options; keep defaults simple (optimized using ChatGPT)
+  // normalize per-format options; keep defaults simple (found during troubleshooting with ChatGPT)
   const out = {};
 
   if (format === 'png') {
@@ -89,7 +89,7 @@ router.get('/whiteboard/:whiteboardId', authenticate, async (req, res) => {
 /**
  * NOTE: keep this route BEFORE "/:id"
  * otherwise "/:id" will capture the "quota" segment.
- * (fixed using ChatGPT)
+ * (found during troubleshooting with ChatGPT)
  */
 // get user’s export quota usage
 router.get('/quota/usage', authenticate, async (req, res) => {

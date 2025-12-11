@@ -3,6 +3,7 @@ const Activity = require('./Activity');
 const ChatMessage = require('./ChatMessage');
 const Element = require('./Element');
 const Export = require('./Export');
+const HangmanGame = require('./HangmanGame');
 const Invitation = require('./Invitation');
 const UserProfile = require('./UserProfile');
 const Whiteboard = require('./Whiteboard');
@@ -14,6 +15,7 @@ module.exports = {
   ChatMessage,
   Element,
   Export,
+  HangmanGame,
   Invitation,
   UserProfile,
   Whiteboard

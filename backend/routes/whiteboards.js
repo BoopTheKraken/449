@@ -362,7 +362,7 @@ router.post(
         return res.status(400).json({ error: 'Elements array is required.' });
       }
 
-      // minimal shaping-client enforces schema (chatGPT bug fix for runtime)
+      // minimal shaping - client enforces schema
       const toSave = elements.map((el) => ({
         ...el,
         whiteboardId: req.params.id,
@@ -388,7 +388,7 @@ router.post(
 /**
  * PUT /api/whiteboards/:id/canvas
  * Save canvas image (PNG/JPEG data URL) to database
- * Note: Base64 validation and size limits implemented using ChatGPT
+ * Note: Base64 validation and size limits (found during troubleshooting with ChatGPT)
  */
 router.put(
   '/:id/canvas',
@@ -408,7 +408,7 @@ router.put(
         return res.status(400).json({ error: 'Invalid image format. Must be PNG or JPEG data URL.' });
       }
 
-      // Check size limit (16MB max for MongoDB, warn if >5MB) (ChatGPT suggestion)
+      // Check size limit (16MB max for MongoDB)
       const sizeInBytes = canvasImage.length;
       const sizeInMB = sizeInBytes / (1024 * 1024);
 

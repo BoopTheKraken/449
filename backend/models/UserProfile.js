@@ -119,7 +119,6 @@ userProfileSchema.statics.syncFromSupabase = async function (supabaseUser) {
   };
 
   // upsert means: create if not exists, otherwise update existing
-  // this also sets empty defaults for nested objects (optimized using ChatGPT)
   return this.findOneAndUpdate(
     { _id: supabaseUser.id },
     {

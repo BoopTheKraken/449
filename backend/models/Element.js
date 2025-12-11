@@ -40,7 +40,7 @@ const elementSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for efficient queries (ChatGPT)
+// Index for efficient queries (found during troubleshooting with ChatGPT)
 elementSchema.index({ whiteboardId: 1, createdAt: 1 });
 
 module.exports = mongoose.model('Element', elementSchema);

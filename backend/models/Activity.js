@@ -24,7 +24,7 @@ const activitySchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for efficient activity log queries (ChatGPT suggestion/improvement)
+// Index for efficient activity log queries (found during troubleshooting with ChatGPT)
 activitySchema.index({ whiteboardId: 1, createdAt: -1 });
 activitySchema.index({ userId: 1, createdAt: -1 });
 

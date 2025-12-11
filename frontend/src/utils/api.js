@@ -8,9 +8,9 @@ const getAPIUrl = () => {
     return ''; // relative URLs in production
   }
 
-  // Development: use same host as frontend but port 4000
+  // Development: use same host as frontend but port 4001
   const { protocol, hostname } = window.location;
-  return `${protocol}//${hostname}:4000`;
+  return `${protocol}//${hostname}:4001`;
 };
 
 export const API_URL = getAPIUrl();

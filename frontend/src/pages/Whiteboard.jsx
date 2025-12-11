@@ -26,6 +26,9 @@ export default function Whiteboard() {
   // panels
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showHangmanInput, setShowHangmanInput] = useState(false);
+  const [hangmanWord, setHangmanWord] = useState("");
   const [gridEnabled, setGridEnabled] = useState(true);
 
   // chat state
@@ -36,12 +39,27 @@ export default function Whiteboard() {
   const [userCount, setUserCount] = useState(1);
   const [isTyping, setIsTyping] = useState(null); // who is typing
 
+  // hangman game state
+  const [hangmanGame, setHangmanGame] = useState(null);
+  const [showHangmanPanel, setShowHangmanPanel] = useState(false);
+  const [panelPosition, setPanelPosition] = useState({
+    x: (window.innerWidth - 500) / 2, // Center horizontally (500px panel width)
+    y: 100
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  // toast notification state
+  const [toastMessage, setToastMessage] = useState(null);
+  const [showToast, setShowToast] = useState(false);
+
   // refs
   const socketRef = useRef(null);
   const [socketState, setSocketState] = useState(null);
   const canvasBoardRef = useRef(null);
   const chatEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+  const hintTimeoutRef = useRef(null);
 
   // quick palette (simple defaults)
   const colors = ["#000000", "#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#6D94C5"];
@@ -261,8 +279,185 @@ export default function Whiteboard() {
       setConnected(false);
     });
 
+    // Hangman game events
+    socket.on('hangman-game-created', (gameState) => {
+      console.log('Hangman game created:', gameState);
+      setHangmanGame(gameState);
+      setShowHangmanPanel(true);
+      // Show AI-generated start prompt
+      showGamePrompt('hangman', 'start');
+    });
+
+    socket.on('hangman-game-state', (gameState) => {
+      console.log('Hangman game state:', gameState);
+      setHangmanGame(gameState);
+      setShowHangmanPanel(true);
+
+      // Request canvas sync from other players to get the gallows template
+      // Peer-to-peer canvas sync mechanism (ChatGPT assisted)
+      if (socket && whiteboardId) {
+        socket.emit('board:request-sync', { roomId: whiteboardId });
+        console.log('Requested canvas sync from other players');
+      }
+
+      // Render hangman template for joining player as fallback (gallows only, no body parts yet)
+      // Dual-approach sync: request from peers + fallback rendering (ChatGPT assisted)
+      const renderHangmanTemplate = async () => {
+        try {
+          // Wait a bit for canvas sync to complete first
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          const response = await fetch(`${API_URL}/api/templates/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              template: 'hangman',
+              useAI: false, // Use fallback for consistency
+            }),
+          });
+          const templateData = await response.json();
+          if (templateData.success && canvasBoardRef.current) {
+            canvasBoardRef.current.renderTemplate(templateData);
+            console.log('Hangman template rendered for joining player (fallback)');
+          }
+        } catch (error) {
+          console.error('Failed to render hangman template:', error);
+        }
+      };
+
+      // Render template as fallback if canvas sync doesn't provide it
+      renderHangmanTemplate();
+
+      // Redraw body parts for existing wrong guesses when joining game
+      // Delay to ensure template renders first
+      setTimeout(() => {
+        if (gameState.wrongGuesses > 0 && canvasBoardRef.current) {
+          for (let i = 1; i <= gameState.wrongGuesses; i++) {
+            canvasBoardRef.current.drawHangmanPart(i, gameState.maxWrongGuesses || 6);
+          }
+        }
+      }, 800);
+    });
+
+    socket.on('hangman-guess-result', (result) => {
+      console.log('Guess result:', result);
+      console.log('Has wrongGuessHint?', !!result.wrongGuessHint, result.wrongGuessHint);
+
+      // Clear any existing hint from previous guess
+      if (canvasBoardRef.current && canvasBoardRef.current.clearHangmanHint) {
+        canvasBoardRef.current.clearHangmanHint();
+      }
+
+      setHangmanGame(prev => ({
+        ...prev,
+        revealedWord: result.revealedWord,
+        guessedLetters: result.guessedLetters,
+        wrongGuesses: result.wrongGuesses,
+        maxWrongGuesses: result.maxWrongGuesses,
+        status: result.status,
+        gameOver: result.gameOver,
+        winner: result.winner,
+        word: result.word,
+      }));
+
+      // Draw hangman body part for wrong guesses
+      if (!result.correct && canvasBoardRef.current) {
+        canvasBoardRef.current.drawHangmanPart(
+          result.wrongGuesses,
+          result.maxWrongGuesses || 6
+        );
+      }
+
+      // Show AI-generated prompts for game events
+      if (result.gameOver) {
+        // Clear canvas when game ends
+        if (canvasBoardRef.current) {
+          setTimeout(() => {
+            canvasBoardRef.current.clear();
+          }, 3000); // Clear canvas 3 seconds after game ends
+        }
+
+        if (result.status === 'won') {
+          showGamePrompt('hangman', 'win', { word: result.word });
+        } else if (result.status === 'lost') {
+          showGamePrompt('hangman', 'lose', { word: result.word });
+        }
+      } else {
+        // Determine if current user made the guess
+        // Personalized prompt system: different messages for self vs others (ChatGPT assisted)
+        const currentUserName = session?.user?.user_metadata?.display_name || session?.user?.email?.split('@')[0];
+        const isCurrentUser = result.guesser === currentUserName;
+
+        // Show personalized prompts based on who made the guess
+        if (isCurrentUser) {
+          // You made the guess - personalized feedback
+          showGamePrompt('hangman', result.correct ? 'hit_self' : 'miss_self', {
+            letter: result.letter
+          });
+        } else {
+          // Someone else guessed - show who and what happened
+          showGamePrompt('hangman', result.correct ? 'hit_other' : 'miss_other', {
+            guesser: result.guesser,
+            letter: result.letter
+          });
+        }
+
+        // Show wrong guess hint with pun/riddle on canvas
+        if (!result.correct && result.wrongGuessHint && canvasBoardRef.current) {
+          console.log('[HANGMAN] Received wrong guess hint:', result.wrongGuessHint);
+
+          // Clear any existing hint timeout
+          if (hintTimeoutRef.current) {
+            clearTimeout(hintTimeoutRef.current);
+          }
+
+          // Display hint on canvas after brief delay
+          setTimeout(() => {
+            console.log('[HANGMAN] Displaying hint on canvas');
+            canvasBoardRef.current.drawHangmanHint(result.wrongGuessHint);
+
+            // Auto-clear hint after 5 seconds
+            hintTimeoutRef.current = setTimeout(() => {
+              console.log('[HANGMAN] Auto-clearing hint after 5 seconds');
+              if (canvasBoardRef.current && canvasBoardRef.current.clearHangmanHint) {
+                canvasBoardRef.current.clearHangmanHint();
+              }
+            }, 5000);
+          }, 1000); // Brief delay so user sees the wrong guess message first
+        } else if (!result.correct) {
+          console.log('[HANGMAN] Wrong guess but no hint received from server');
+        }
+      }
+    });
+
+    socket.on('hangman-error', (error) => {
+      console.error('Hangman error:', error);
+      alert(error.message || 'Hangman game error');
+    });
+
+    socket.on('hangman-no-game', () => {
+      setHangmanGame(null);
+      setShowHangmanPanel(false);
+    });
+
+    socket.on('hangman-game-ended', ({ word, endedBy }) => {
+      console.log('[HANGMAN] Game ended early by:', endedBy);
+      alert(`Game ended by ${endedBy}. The word was: ${word}`);
+
+      // Clear canvas when game is ended early
+      if (canvasBoardRef.current) {
+        setTimeout(() => {
+          canvasBoardRef.current.clear();
+        }, 1000);
+      }
+
+      setHangmanGame(null);
+      setShowHangmanPanel(false);
+    });
+
     return () => {
       clearTimeout(typingTimeoutRef.current);
+      clearTimeout(hintTimeoutRef.current);
       socket.off();
       socket.disconnect();
     };
@@ -392,6 +587,236 @@ export default function Whiteboard() {
         );
       });
   };
+
+  // generate AI template
+  const generateTemplate = async (templateName, gameData = {}) => {
+    try {
+      setShowTemplates(false);
+      setShowHangmanInput(false);
+      console.log(`Generating ${templateName} template...`, gameData);
+
+      const response = await fetch(`${API_URL}/api/templates/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template: templateName,
+          useAI: true,
+          ...gameData
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to generate template: ${response.statusText}`);
+      }
+
+      const templateData = await response.json();
+      console.log('Template data received:', templateData);
+
+      if (templateData.success && canvasBoardRef.current) {
+        canvasBoardRef.current.renderTemplate(templateData);
+
+        // Create interactive game if hangman with word
+        if (templateName === 'hangman' && gameData.word) {
+          createHangmanGame(gameData.word, templateData);
+          // Show game panel immediately for creator
+          setShowHangmanPanel(true);
+        }
+
+        // Don't show alert for hangman (panel will show instead)
+        if (templateName !== 'hangman') {
+          alert(`${templateName.toUpperCase()} template generated! ${templateData.source === 'ai' ? '(AI-powered)' : '(Fallback)'}`);
+        }
+      } else {
+        throw new Error('Invalid template response');
+      }
+    } catch (error) {
+      console.error('Template generation error:', error);
+      alert(`Failed to generate template: ${error.message}`);
+    }
+  };
+
+  // Handle hangman template click
+  const handleHangmanClick = () => {
+    setShowTemplates(false);
+    setShowHangmanInput(true);
+  };
+
+  // Create hangman game
+  const createHangmanGame = (word, templateData) => {
+    if (!socketRef.current || !whiteboardId) return;
+
+    socketRef.current.emit('create-hangman-game', {
+      roomId: whiteboardId,
+      word: word.toUpperCase(),
+      creatorId: session?.user?.id,
+    });
+
+    console.log('Hangman game created with word:', word);
+  };
+
+  // Submit hangman word and generate
+  const handleHangmanSubmit = () => {
+    const word = hangmanWord.trim().toUpperCase();
+
+    if (!word) {
+      alert('Please enter a word!');
+      return;
+    }
+
+    if (!/^[A-Z]+$/.test(word)) {
+      alert('Only letters allowed!');
+      return;
+    }
+
+    if (word.length < 3 || word.length > 12) {
+      alert('Word must be 3-12 letters long!');
+      return;
+    }
+
+    generateTemplate('hangman', { word });
+    setHangmanWord('');
+    setShowHangmanInput(false);
+  };
+
+  // Guess a letter in hangman game
+  const guessLetter = (letter) => {
+    if (!socketRef.current || !whiteboardId || !hangmanGame) return;
+
+    socketRef.current.emit('guess-letter', {
+      roomId: whiteboardId,
+      letter: letter.toUpperCase(),
+    });
+  };
+
+  // Join existing hangman game
+  const joinHangmanGame = () => {
+    if (!socketRef.current || !whiteboardId) return;
+
+    socketRef.current.emit('join-hangman-game', {
+      roomId: whiteboardId,
+    });
+  };
+
+  // Resume/reopen hangman panel
+  const resumeHangmanGame = () => {
+    if (!socketRef.current || !whiteboardId) return;
+
+    // Request current game state
+    socketRef.current.emit('join-hangman-game', {
+      roomId: whiteboardId,
+    });
+
+    // Show panel
+    setShowHangmanPanel(true);
+  };
+
+  // End hangman game early
+  const endHangmanGame = () => {
+    if (!socketRef.current || !whiteboardId) return;
+
+    socketRef.current.emit('end-hangman-game', {
+      roomId: whiteboardId,
+    });
+  };
+
+  // Fetch and display AI-generated game prompt
+  const showGamePrompt = async (game, event, context = {}) => {
+    try {
+      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:4001'}/api/templates/game-prompt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game, event, context }),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        setToastMessage(data.prompt);
+        setShowToast(true);
+      }
+    } catch (error) {
+      console.error('Failed to fetch game prompt:', error);
+      // Fallback to basic message
+      setToastMessage(context.fallback || 'Game event!');
+      setShowToast(true);
+    }
+  };
+
+  // Auto-hide toast after 10 seconds
+  useEffect(() => {
+    if (showToast) {
+      const timer = setTimeout(() => {
+        setShowToast(false);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [showToast]);
+
+ 
+
+  // Draggable panel handlers
+  const handlePanelMouseDown = (e) => {
+    if (e.target.closest('.panel-content')) return; // Don't drag if clicking content
+    setIsDragging(true);
+    setDragOffset({
+      x: e.clientX - panelPosition.x,
+      y: e.clientY - panelPosition.y,
+    });
+  };
+
+  const handlePanelMouseMove = (e) => {
+    if (!isDragging) return;
+    setPanelPosition({
+      x: e.clientX - dragOffset.x,
+      y: e.clientY - dragOffset.y,
+    });
+  };
+
+  const handlePanelMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  // Hangman panel touch handlers (for iPad/mobile)
+  // Touch event implementation for drag functionality on touch devices (ChatGPT assisted)
+  const handlePanelTouchStart = (e) => {
+    if (e.target.closest('.panel-content')) return; // Don't drag if touching content
+    const touch = e.touches[0];
+    setIsDragging(true);
+    setDragOffset({
+      x: touch.clientX - panelPosition.x,
+      y: touch.clientY - panelPosition.y,
+    });
+  };
+
+  const handlePanelTouchMove = (e) => {
+    if (!isDragging) return;
+    e.preventDefault(); // Prevent scrolling while dragging (ChatGPT assisted)
+    const touch = e.touches[0];
+    setPanelPosition({
+      x: touch.clientX - dragOffset.x,
+      y: touch.clientY - dragOffset.y,
+    });
+  };
+
+  const handlePanelTouchEnd = () => {
+    setIsDragging(false);
+  };
+
+  // Add global mouse and touch listeners for dragging
+  // Using passive: false for touchmove to allow preventDefault() (ChatGPT assisted)
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handlePanelMouseMove);
+      window.addEventListener('mouseup', handlePanelMouseUp);
+      window.addEventListener('touchmove', handlePanelTouchMove, { passive: false });
+      window.addEventListener('touchend', handlePanelTouchEnd);
+      return () => {
+        window.removeEventListener('mousemove', handlePanelMouseMove);
+        window.removeEventListener('mouseup', handlePanelMouseUp);
+        window.removeEventListener('touchmove', handlePanelTouchMove);
+        window.removeEventListener('touchend', handlePanelTouchEnd);
+      };
+    }
+  }, [isDragging, dragOffset]);
 
   if (loading) {
     return (
@@ -700,6 +1125,18 @@ export default function Whiteboard() {
               )}
             </button>
 
+            {/* Resume Hangman Game Button - Shows when active game exists */}
+            {hangmanGame && hangmanGame.status === 'active' && !showHangmanPanel && (
+              <button
+                onClick={resumeHangmanGame}
+                className="p-2 rounded transition-colors bg-green-500 hover:bg-green-600 text-white relative animate-pulse"
+                title="Resume Active Hangman Game"
+              >
+                <i className="fa-solid fa-gamepad" />
+                <span className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-400 rounded-full" />
+              </button>
+            )}
+
             <button
               onClick={() => setShowSettings((v) => !v)}
               className={`p-2 rounded transition-colors ${
@@ -708,6 +1145,16 @@ export default function Whiteboard() {
               title="Settings"
             >
               <i className="fa-solid fa-gear" />
+            </button>
+
+            <button
+              onClick={() => setShowTemplates((v) => !v)}
+              className={`p-2 rounded transition-colors ${
+                showTemplates ? "bg-primary text-white" : "hover:bg-light-blue text-gray-700"
+              }`}
+              title="AI Game Templates"
+            >
+              <i className="fa-solid fa-wand-magic-sparkles" />
             </button>
           </div>
         </div>
@@ -888,6 +1335,329 @@ export default function Whiteboard() {
           </div>
         )}
 
+        {/* Hangman Word Input Modal */}
+        {showHangmanInput && (
+          <div className="absolute inset-0 bg-black bg-opacity-30 flex items-center justify-center p-4 z-40">
+            <div className="w-96 bg-white rounded-lg shadow-2xl p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold text-gray-700 text-lg flex items-center gap-2">
+                  <i className="fa-solid fa-user-ninja text-primary"></i>
+                  Create Hangman Game
+                </h3>
+                <button
+                  onClick={() => setShowHangmanInput(false)}
+                  className="text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  <i className="fa-solid fa-times" />
+                </button>
+              </div>
+
+              <p className="text-sm text-gray-600 mb-4">
+                Enter a secret word for players to guess (3-12 letters)
+              </p>
+
+              <input
+                type="text"
+                value={hangmanWord}
+                onChange={(e) => setHangmanWord(e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === 'Enter' && handleHangmanSubmit()}
+                placeholder="Enter word..."
+                maxLength={12}
+                className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-center text-2xl font-bold uppercase tracking-widest"
+                autoFocus
+              />
+
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => setShowHangmanInput(false)}
+                  className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleHangmanSubmit}
+                  className="flex-1 px-4 py-2 bg-primary hover:opacity-90 text-white rounded-lg transition-opacity font-semibold"
+                >
+                  Create Game
+                </button>
+              </div>
+
+              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-xs text-gray-600">
+                <i className="fa-solid fa-info-circle text-yellow-600 mr-1"></i>
+                Other players will see blanks and guess letters to reveal the word!
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* AI Templates panel */}
+        {showTemplates && (
+          <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center p-4 z-30">
+            <div className="w-96 bg-white rounded-lg shadow-xl p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-semibold text-gray-700 text-lg flex items-center gap-2">
+                  <i className="fa-solid fa-wand-magic-sparkles text-primary"></i>
+                  AI Game Templates
+                </h3>
+                <button
+                  onClick={() => setShowTemplates(false)}
+                  className="text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  <i className="fa-solid fa-times" />
+                </button>
+              </div>
+
+              <p className="text-sm text-gray-600 mb-4">
+                Generate game templates on your canvas using AI or pre-built fallbacks
+              </p>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => {
+                    setShowTemplates(false);
+                    if (hangmanGame && hangmanGame.status === 'active') {
+                      resumeHangmanGame();
+                    } else {
+                      handleHangmanClick();
+                    }
+                  }}
+                  className={`w-full p-4 bg-gradient-to-r rounded-lg transition-all duration-200 hover:shadow-md border-2 ${
+                    hangmanGame && hangmanGame.status === 'active'
+                      ? 'from-green-100 to-green-200 hover:from-green-200 hover:to-green-300 border-green-400'
+                      : 'from-cream to-beige hover:from-light-blue hover:to-cream border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <i className="fa-solid fa-user-ninja text-2xl text-primary"></i>
+                    <div className="text-left flex-1">
+                      <div className="font-semibold text-gray-800">
+                        {hangmanGame && hangmanGame.status === 'active' ? 'Resume Hangman' : 'Hangman Game'}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {hangmanGame && hangmanGame.status === 'active'
+                          ? 'Continue your word guessing game'
+                          : 'Interactive multiplayer word guessing'
+                        }
+                      </div>
+                    </div>
+                    {hangmanGame && hangmanGame.status === 'active' && (
+                      <i className="fa-solid fa-play-circle text-xl text-green-600"></i>
+                    )}
+                  </div>
+                </button>
+              </div>
+
+              <div className="mt-4 p-3 bg-blue-50 rounded-lg text-xs text-gray-600">
+                <i className="fa-solid fa-info-circle text-blue-500 mr-1"></i>
+                Templates are generated using Ollama AI when available
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hangman Game Panel */}
+        {showHangmanPanel && hangmanGame && (
+          <div
+            className="absolute w-[500px] bg-white border-2 border-primary rounded-lg shadow-2xl z-30"
+            style={{
+              left: `${panelPosition.x}px`,
+              top: `${panelPosition.y}px`,
+              cursor: isDragging ? 'grabbing' : 'default',
+            }}
+          >
+            <div
+              className="p-4 bg-gradient-to-r from-primary to-blue-600 text-white rounded-t-lg flex justify-between items-center cursor-grab active:cursor-grabbing"
+              onMouseDown={handlePanelMouseDown}
+              onTouchStart={handlePanelTouchStart}
+            >
+              <h3 className="font-bold text-lg flex items-center gap-2 select-none">
+                <i className="fa-solid fa-gamepad"></i>
+                Hangman Game
+              </h3>
+              <button
+                onClick={() => setShowHangmanPanel(false)}
+                className="text-white hover:bg-white/20 p-1 rounded transition-colors"
+              >
+                <i className="fa-solid fa-times" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 panel-content">
+              {/* Game Status */}
+              {hangmanGame.status !== 'active' ? (
+                <div className="space-y-3">
+                  <div className={`p-3 rounded-lg text-center font-bold ${
+                    hangmanGame.status === 'won'
+                      ? 'bg-green-100 text-green-800'
+                      : 'bg-red-100 text-red-800'
+                  }`}>
+                    {hangmanGame.status === 'won' ? 'YOU WON!' : 'GAME OVER'}
+                    <div className="text-sm mt-1">Word: {hangmanGame.word}</div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowHangmanPanel(false);
+                      setHangmanGame(null);
+                      setShowHangmanInput(true);
+                    }}
+                    className="w-full px-4 py-2 bg-primary hover:bg-blue-600 text-white rounded-lg transition-colors font-semibold"
+                  >
+                    Start New Game
+                  </button>
+                </div>
+              ) : null}
+
+              {/* Revealed Word */}
+              <div className="bg-cream p-4 rounded-lg">
+                <div className="text-center text-3xl font-bold tracking-[0.5em] text-gray-800 font-mono">
+                  {hangmanGame.revealedWord || '_ _ _ _ _'}
+                </div>
+              </div>
+
+              {/* AI-Generated Hint */}
+              {hangmanGame.hint && (
+                <div className="bg-gradient-to-r from-purple-50 to-pink-50 p-3 rounded-lg border border-purple-200">
+                  <div className="flex items-start gap-2">
+                    <i className="fa-solid fa-lightbulb text-yellow-500 mt-1"></i>
+                    <div>
+                      <div className="text-xs font-semibold text-purple-600 mb-1">AI HINT</div>
+                      <div className="text-sm text-gray-700 italic">"{hangmanGame.hint}"</div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Wrong Guesses Indicator */}
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Wrong Guesses:</span>
+                <div className="flex gap-1 flex-wrap max-w-[140px]">
+                  {[...Array(hangmanGame.maxWrongGuesses || 6)].map((_, i) => (
+                    <div
+                      key={i}
+                      className={`w-3 h-3 rounded-full ${
+                        i < hangmanGame.wrongGuesses ? 'bg-red-500' : 'bg-gray-300'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <span className="font-bold text-red-600">
+                  {hangmanGame.wrongGuesses}/{hangmanGame.maxWrongGuesses || 6}
+                </span>
+              </div>
+
+              {/* Difficulty Indicator */}
+              <div className="text-xs text-center p-2 bg-blue-50 rounded">
+                <span className="font-semibold flex items-center justify-center gap-1">
+                  {(hangmanGame.maxWrongGuesses || 6) === 6 && (
+                    <>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <span>Easy Mode</span>
+                    </>
+                  )}
+                  {(hangmanGame.maxWrongGuesses || 6) === 8 && (
+                    <>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <span>Medium Mode</span>
+                    </>
+                  )}
+                  {(hangmanGame.maxWrongGuesses || 6) === 10 && (
+                    <>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <i className="fa-solid fa-star text-yellow-500"></i>
+                      <span>Hard Mode</span>
+                    </>
+                  )}
+                </span>
+              </div>
+
+              {/* End Game Button */}
+              {hangmanGame.status === 'active' && (
+                <button
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to end the game early?')) {
+                      endHangmanGame();
+                    }
+                  }}
+                  className="w-full px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors font-semibold text-sm"
+                >
+                  <i className="fa-solid fa-stop-circle mr-2"></i>
+                  End Game
+                </button>
+              )}
+
+              {/* Alphabet Grid */}
+              {hangmanGame.status === 'active' && (
+                <div>
+                  <div className="text-xs text-gray-600 mb-2">Click a letter to guess:</div>
+                  <div className="space-y-1">
+                    {/* First row: A-M */}
+                    <div className="flex gap-1 justify-center">
+                      {'ABCDEFGHIJKLM'.split('').map(letter => {
+                        const guessed = hangmanGame.guessedLetters?.includes(letter);
+                        return (
+                          <button
+                            key={letter}
+                            onClick={() => !guessed && guessLetter(letter)}
+                            disabled={guessed}
+                            className={`w-8 h-8 rounded font-bold text-sm transition-all ${
+                              guessed
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : 'bg-primary hover:bg-blue-600 text-white hover:scale-110 shadow-sm'
+                            }`}
+                          >
+                            {letter}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* Second row: N-Z */}
+                    <div className="flex gap-1 justify-center">
+                      {'NOPQRSTUVWXYZ'.split('').map(letter => {
+                        const guessed = hangmanGame.guessedLetters?.includes(letter);
+                        return (
+                          <button
+                            key={letter}
+                            onClick={() => !guessed && guessLetter(letter)}
+                            disabled={guessed}
+                            className={`w-8 h-8 rounded font-bold text-sm transition-all ${
+                              guessed
+                                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                : 'bg-primary hover:bg-blue-600 text-white hover:scale-110 shadow-sm'
+                            }`}
+                          >
+                            {letter}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Creator Info */}
+              {hangmanGame.isCreator && (
+                <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-center text-gray-700">
+                  <i className="fa-solid fa-crown text-yellow-600 mr-1"></i>
+                  You created this game. Secret word: <span className="font-bold">{hangmanGame.word}</span>
+                  <div className="mt-1 text-[10px] text-gray-500">
+                    (You can still play along!)
+                  </div>
+                </div>
+              )}
+
+              {/* Winner Info */}
+              {hangmanGame.winner && (
+                <div className="p-2 bg-green-50 border border-green-200 rounded text-xs text-center text-green-800">
+                  <i className="fa-solid fa-trophy text-yellow-500 mr-1"></i>
+                  Winner: <span className="font-bold">{hangmanGame.winner.userName}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* settings panel */}
         {showSettings && (
           <div className="absolute inset-0 bg-black bg-opacity-20 flex items-start justify-end p-4 z-20">
@@ -981,6 +1751,18 @@ export default function Whiteboard() {
                   </p>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Toast Notification for Game Prompts */}
+        {showToast && toastMessage && (
+          <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50 animate-bounce">
+            <div className="bg-gradient-to-r from-primary to-blue-600 text-white px-6 py-4 rounded-lg shadow-2xl border-2 border-blue-200 max-w-md">
+              <p className="text-center font-bold text-lg">
+                <i className="fa-solid fa-circle-info mr-2"></i>
+                {toastMessage}
+              </p>
             </div>
           </div>
         )}

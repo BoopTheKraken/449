@@ -57,7 +57,7 @@ const invitationSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound index for efficient queries (ChatGPT suggestion/improvement)
+// Compound index for efficient queries (found during troubleshooting with ChatGPT)
 invitationSchema.index({ whiteboardId: 1, status: 1 });
 invitationSchema.index({ recipientEmail: 1, status: 1 });
 
@@ -69,7 +69,7 @@ invitationSchema.virtual('isValid').get(function() {
   return this.status === 'pending' && this.expiresAt > new Date();
 });
 
-// Method to generate unique token (ChatGPT suggestion/improvement)
+// Method to generate unique token (found during troubleshooting with ChatGPT)
 invitationSchema.statics.generateToken = function() {
   const crypto = require('crypto');
   return crypto.randomBytes(32).toString('hex');

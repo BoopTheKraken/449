@@ -61,7 +61,8 @@ const whiteboardSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Index for faster queries (ChatGPT suggestion/improvement)
+// Index for faster queries (found during troubleshooting with ChatGPT) <-- since this is where it was first suggested, 
+// used it in other models to stay consistent and kep tthe note.
 whiteboardSchema.index({ ownerId: 1, createdAt: -1 });
 whiteboardSchema.index({ 'members.userId': 1 });
 

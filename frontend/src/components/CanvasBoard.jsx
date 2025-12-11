@@ -13,7 +13,6 @@ import {
   useMemo,
 } from "react";
 import { API_URL } from "../utils/api";
-import { jsPDF } from "jspdf";
 
 // Logical canvas space shared by all clients
 const VIRTUAL_WIDTH = 1920;
@@ -1528,6 +1527,294 @@ const CanvasBoard = forwardRef(function CanvasBoard(
         }
       }
       pushHistory();
+    },
+
+    renderTemplate(templateData) {
+      const ctx = ctxRef.current;
+      if (!ctx || !templateData || !Array.isArray(templateData.elements)) {
+        console.error("Invalid template data");
+        return;
+      }
+
+      // Clear canvas before rendering template
+      ctx.clearRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+      hasLoadedContent.current = true;
+
+      console.log(`Rendering ${templateData.template} template with ${templateData.elements.length} elements`);
+
+      for (const el of templateData.elements) {
+        try {
+          ctx.save();
+          ctx.globalCompositeOperation = "source-over";
+
+          switch (el.type) {
+            case "line":
+              ctx.strokeStyle = el.color || "#000000";
+              ctx.lineWidth = el.width || 2;
+              ctx.beginPath();
+              ctx.moveTo(el.x1, el.y1);
+              ctx.lineTo(el.x2, el.y2);
+              ctx.stroke();
+              break;
+
+            case "circle":
+              ctx.strokeStyle = el.color || "#000000";
+              ctx.lineWidth = el.width || 2;
+              ctx.beginPath();
+              ctx.arc(el.x, el.y, el.radius, 0, Math.PI * 2);
+              ctx.stroke();
+              break;
+
+            case "rectangle":
+              ctx.strokeStyle = el.color || "#000000";
+              ctx.lineWidth = el.strokeWidth || 2;
+              ctx.strokeRect(el.x, el.y, el.width, el.height);
+              break;
+
+            case "text":
+              ctx.fillStyle = el.color || "#000000";
+              ctx.font = `${el.size || 16}px Arial`;
+              ctx.textBaseline = "top";
+              ctx.fillText(el.text || "", el.x, el.y);
+              break;
+
+            default:
+              console.warn(`Unknown template element type: ${el.type}`);
+          }
+
+          ctx.restore();
+        } catch (err) {
+          console.error("Template render error for element:", el, err);
+        }
+      }
+
+      pushHistory();
+      console.log("Template rendered successfully");
+    },
+
+    drawHangmanPart(partNumber, maxParts = 6) {
+      const ctx = ctxRef.current;
+      if (!ctx) return;
+
+      ctx.save();
+      ctx.strokeStyle = "#000000";
+      ctx.fillStyle = "#000000";
+      ctx.lineWidth = 4;
+      ctx.lineCap = "round";
+
+      // Coordinates for 1920x1080 canvas (rope ends at x=1050, y=350)
+      const headX = 1050;
+      const headY = 410;
+      const headRadius = 50;
+      const bodyTop = headY + headRadius;
+      const bodyBottom = bodyTop + 120;
+      const armY = bodyTop + 30;
+      const legY = bodyBottom;
+
+      // Scale parts based on max allowed (longer words = more parts)
+      const partsMap = maxParts === 6 ?
+        // Standard 6 parts
+        [
+          () => { // 1. Head
+            ctx.beginPath();
+            ctx.arc(headX, headY, headRadius, 0, Math.PI * 2);
+            ctx.stroke();
+          },
+          () => { // 2. Body
+            ctx.beginPath();
+            ctx.moveTo(headX, bodyTop);
+            ctx.lineTo(headX, bodyBottom);
+            ctx.stroke();
+          },
+          () => { // 3. Left arm
+            ctx.beginPath();
+            ctx.moveTo(headX, armY);
+            ctx.lineTo(headX - 50, armY + 50);
+            ctx.stroke();
+          },
+          () => { // 4. Right arm
+            ctx.beginPath();
+            ctx.moveTo(headX, armY);
+            ctx.lineTo(headX + 50, armY + 50);
+            ctx.stroke();
+          },
+          () => { // 5. Left leg
+            ctx.beginPath();
+            ctx.moveTo(headX, legY);
+            ctx.lineTo(headX - 40, legY + 70);
+            ctx.stroke();
+          },
+          () => { // 6. Right leg
+            ctx.beginPath();
+            ctx.moveTo(headX, legY);
+            ctx.lineTo(headX + 40, legY + 70);
+            ctx.stroke();
+          },
+        ] :
+        // Extended 10 parts for longer words
+        [
+          () => { // 1. Head
+            ctx.beginPath();
+            ctx.arc(headX, headY, headRadius, 0, Math.PI * 2);
+            ctx.stroke();
+          },
+          () => { // 2. Eyes
+            ctx.fillRect(headX - 15, headY - 10, 8, 8);
+            ctx.fillRect(headX + 7, headY - 10, 8, 8);
+          },
+          () => { // 3. Mouth (frown)
+            ctx.beginPath();
+            ctx.arc(headX, headY + 10, 15, 0.2 * Math.PI, 0.8 * Math.PI);
+            ctx.stroke();
+          },
+          () => { // 4. Body
+            ctx.beginPath();
+            ctx.moveTo(headX, bodyTop);
+            ctx.lineTo(headX, bodyBottom);
+            ctx.stroke();
+          },
+          () => { // 5. Left arm
+            ctx.beginPath();
+            ctx.moveTo(headX, armY);
+            ctx.lineTo(headX - 50, armY + 50);
+            ctx.stroke();
+          },
+          () => { // 6. Right arm
+            ctx.beginPath();
+            ctx.moveTo(headX, armY);
+            ctx.lineTo(headX + 50, armY + 50);
+            ctx.stroke();
+          },
+          () => { // 7. Left hand
+            ctx.beginPath();
+            ctx.arc(headX - 50, armY + 50, 8, 0, Math.PI * 2);
+            ctx.fill();
+          },
+          () => { // 8. Right hand
+            ctx.beginPath();
+            ctx.arc(headX + 50, armY + 50, 8, 0, Math.PI * 2);
+            ctx.fill();
+          },
+          () => { // 9. Left leg
+            ctx.beginPath();
+            ctx.moveTo(headX, legY);
+            ctx.lineTo(headX - 40, legY + 70);
+            ctx.stroke();
+          },
+          () => { // 10. Right leg
+            ctx.beginPath();
+            ctx.moveTo(headX, legY);
+            ctx.lineTo(headX + 40, legY + 70);
+            ctx.stroke();
+          },
+        ];
+
+      // Draw the part if within bounds
+      if (partNumber > 0 && partNumber <= partsMap.length) {
+        partsMap[partNumber - 1]();
+      }
+
+      ctx.restore();
+      pushHistory();
+    },
+
+    drawHangmanHint(hintText) {
+      const ctx = ctxRef.current;
+      if (!ctx || !hintText) return;
+
+      ctx.save();
+
+      // Position hint text near hangman's head (to the right)
+      const hintX = 1200; // Right of the hangman
+      const hintY = 300;  // Near the head area
+      const maxWidth = 600; // Maximum width for text wrapping
+      const padding = 20;
+      const lineHeight = 30;
+
+      // Set font for measuring
+      ctx.font = '18px Arial';
+
+      // Word wrap the hint text
+      const words = hintText.split(' ');
+      const lines = [];
+      let currentLine = '';
+
+      words.forEach(word => {
+        const testLine = currentLine + (currentLine ? ' ' : '') + word;
+        const metrics = ctx.measureText(testLine);
+
+        if (metrics.width > maxWidth - padding * 2) {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        } else {
+          currentLine = testLine;
+        }
+      });
+      if (currentLine) lines.push(currentLine);
+
+      // Calculate actual box width based on content
+      let actualMaxWidth = 0;
+      ctx.font = 'bold 22px Arial';
+      const headerWidth = ctx.measureText('HINT!').width;
+      actualMaxWidth = Math.max(actualMaxWidth, headerWidth);
+
+      ctx.font = '18px Arial';
+      lines.forEach(line => {
+        const lineWidth = ctx.measureText(line).width;
+        actualMaxWidth = Math.max(actualMaxWidth, lineWidth);
+      });
+
+      // Add padding to width and set minimum width
+      const boxWidth = Math.max(200, actualMaxWidth + padding * 2);
+      const boxHeight = lines.length * lineHeight + padding * 2 + 40; // Extra space for header
+
+      // Draw hint box background with rounded corners (light blue thought bubble style)
+      ctx.fillStyle = 'rgba(173, 216, 230, 0.95)'; // Light blue background
+      ctx.strokeStyle = '#87CEEB'; // Faint blue border (skyblue)
+      ctx.lineWidth = 2;
+
+      // Rounded rectangle
+      const radius = 10;
+      ctx.beginPath();
+      ctx.moveTo(hintX + radius, hintY);
+      ctx.lineTo(hintX + boxWidth - radius, hintY);
+      ctx.quadraticCurveTo(hintX + boxWidth, hintY, hintX + boxWidth, hintY + radius);
+      ctx.lineTo(hintX + boxWidth, hintY + boxHeight - radius);
+      ctx.quadraticCurveTo(hintX + boxWidth, hintY + boxHeight, hintX + boxWidth - radius, hintY + boxHeight);
+      ctx.lineTo(hintX + radius, hintY + boxHeight);
+      ctx.quadraticCurveTo(hintX, hintY + boxHeight, hintX, hintY + boxHeight - radius);
+      ctx.lineTo(hintX, hintY + radius);
+      ctx.quadraticCurveTo(hintX, hintY, hintX + radius, hintY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Draw "HINT!" header
+      ctx.fillStyle = '#4169E1'; // Royal blue
+      ctx.font = 'bold 22px Arial';
+      ctx.fillText('HINT!', hintX + padding, hintY + padding + 22);
+
+      // Draw hint text lines
+      ctx.fillStyle = '#333333';
+      ctx.font = '18px Arial';
+      lines.forEach((line, index) => {
+        ctx.fillText(
+          line,
+          hintX + padding,
+          hintY + padding + 52 + (index * lineHeight)
+        );
+      });
+
+      ctx.restore();
+      // Don't call pushHistory() - hint should be temporary and not saved to history
+    },
+
+    clearHangmanHint() {
+      // Redraw the canvas state to remove the temporary hint
+      // Since hint wasn't saved to history, we restore from current history step
+      if (historyStepRef.current >= 0) {
+        restoreHistory(historyStepRef.current);
+      }
     },
   }));
 

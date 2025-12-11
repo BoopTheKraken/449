@@ -48,7 +48,7 @@ const chatMessageSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound indexes for efficient queries (ChatGPT suggestion/improvement)
+// Compound indexes for efficient queries (found during troubleshooting with ChatGPT)
 chatMessageSchema.index({ whiteboardId: 1, createdAt: -1 });
 chatMessageSchema.index({ whiteboardId: 1, userId: 1 });
 

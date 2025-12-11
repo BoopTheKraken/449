@@ -67,6 +67,7 @@ app.use('/api/whiteboards', require('./routes/whiteboards'));
 app.use('/api/invitations', require('./routes/invitations'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/exports', require('./routes/exports'));
+app.use('/api/templates', require('./routes/templates'));
 
 // serve React app for all other routes (must be after API routes)
 app.get('*', (req, res) => {
@@ -147,7 +148,7 @@ io.use(async (socket, next) => {
 
 // ============== SOCKET.IO HANDLERS =============
 
-const { Whiteboard, ChatMessage, Activity, Element } = require('./models');
+const { Whiteboard, ChatMessage, Activity, Element, HangmanGame } = require('./models');
 
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.userName} (${socket.id})`);
@@ -408,6 +409,302 @@ io.on('connection', (socket) => {
     });
   });
 
+  // HANGMAN GAME EVENTS
+
+  // Create new hangman game
+  socket.on('create-hangman-game', async ({ roomId, word, creatorId }) => {
+    try {
+      if (!roomId || !word) {
+        return socket.emit('error', { message: 'Missing roomId or word' });
+      }
+
+      // Check if game already exists for this whiteboard - delete it to start fresh
+      const existingGame = await HangmanGame.findOne({
+        whiteboardId: roomId,
+        status: 'active',
+      });
+
+      if (existingGame) {
+        console.log(`[HANGMAN] Deleting existing active game to start fresh`);
+        await HangmanGame.deleteOne({ _id: existingGame._id });
+      }
+
+      // Calculate max wrong guesses based on word length
+      const wordLength = word.length;
+      let maxWrongGuesses;
+      if (wordLength <= 5) {
+        maxWrongGuesses = 6; // Short words: 6 parts
+      } else if (wordLength <= 8) {
+        maxWrongGuesses = 8; // Medium words: 8 parts
+      } else {
+        maxWrongGuesses = 10; // Long words: 10 parts (with details)
+      }
+
+      // Generate witty hint for the word
+      let generatedHint = '';
+      try {
+        const hintResponse = await fetch('http://localhost:5000/api/templates/hangman-hint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ word: word.toUpperCase() }),
+        });
+
+        if (hintResponse.ok) {
+          const hintData = await hintResponse.json();
+          generatedHint = hintData.hint || '';
+          console.log(`[HANGMAN] Generated hint: ${generatedHint}`);
+        }
+      } catch (hintError) {
+        console.warn('[HANGMAN] Failed to generate hint:', hintError.message);
+      }
+
+      // Create new game
+      game = await HangmanGame.create({
+        whiteboardId: roomId,
+        creatorId: creatorId || socket.userId,
+        word: word.toUpperCase(),
+        hint: generatedHint,
+        maxWrongGuesses,
+        players: [{
+          userId: socket.userId,
+          userName: socket.userName,
+          joinedAt: new Date(),
+        }],
+      });
+
+      console.log(`Hangman game created in room ${roomId}: ${word}`);
+
+      // Broadcast to everyone in room (except creator sees word)
+      console.log(`[HANGMAN] Emitting hangman-game-created to room ${roomId}`);
+      socket.to(roomId).emit('hangman-game-created', {
+        gameId: game._id,
+        revealedWord: game.getRevealedWord(),
+        availableLetters: game.getAvailableLetters(),
+        guessedLetters: game.guessedLetters,
+        wrongGuesses: game.wrongGuesses,
+        maxWrongGuesses: game.maxWrongGuesses,
+        status: game.status,
+        hint: game.hint,
+      });
+
+      // Send full state to creator
+      console.log(`[HANGMAN] Emitting hangman-game-created to creator`);
+      socket.emit('hangman-game-created', {
+        gameId: game._id,
+        word: game.word, // Creator sees the word
+        revealedWord: game.getRevealedWord(),
+        availableLetters: game.getAvailableLetters(),
+        guessedLetters: game.guessedLetters,
+        wrongGuesses: game.wrongGuesses,
+        maxWrongGuesses: game.maxWrongGuesses,
+        status: game.status,
+        hint: game.hint,
+        isCreator: true,
+      });
+
+    } catch (err) {
+      console.error('Create hangman game error:', err);
+      socket.emit('hangman-error', { message: 'Failed to create game' });
+    }
+  });
+
+  // Join hangman game
+  socket.on('join-hangman-game', async ({ roomId }) => {
+    try {
+      const game = await HangmanGame.findOne({
+        whiteboardId: roomId,
+        status: 'active',
+      });
+
+      if (!game) {
+        return socket.emit('hangman-error', { message: 'No active game found' });
+      }
+
+      // Add player if not already in
+      const alreadyJoined = game.players.some(p => p.userId === socket.userId);
+      if (!alreadyJoined) {
+        game.players.push({
+          userId: socket.userId,
+          userName: socket.userName,
+          joinedAt: new Date(),
+        });
+        await game.save();
+      }
+
+      // Send current game state
+      socket.emit('hangman-game-state', {
+        gameId: game._id,
+        revealedWord: game.getRevealedWord(),
+        guessedLetters: game.guessedLetters,
+        availableLetters: game.getAvailableLetters(),
+        wrongGuesses: game.wrongGuesses,
+        maxWrongGuesses: game.maxWrongGuesses,
+        status: game.status,
+        players: game.players.length,
+        hint: game.hint,
+      });
+
+      console.log(`${socket.userName} joined hangman game in room ${roomId}`);
+    } catch (err) {
+      console.error('Join hangman game error:', err);
+      socket.emit('hangman-error', { message: 'Failed to join game' });
+    }
+  });
+
+  // Guess a letter
+  socket.on('guess-letter', async ({ roomId, letter }) => {
+    try {
+      const game = await HangmanGame.findOne({
+        whiteboardId: roomId,
+        status: 'active',
+      });
+
+      if (!game) {
+        return socket.emit('hangman-error', { message: 'No active game found' });
+      }
+
+      // Process the guess
+      const result = game.guessLetter(letter);
+
+      if (!result.success) {
+        return socket.emit('hangman-error', { message: result.message });
+      }
+
+      // Save updated game
+      await game.save();
+
+      // If game won, record winner
+      if (result.status === 'won' && !game.winner) {
+        game.winner = {
+          userId: socket.userId,
+          userName: socket.userName,
+        };
+        await game.save();
+      }
+
+      // Generate hint for wrong guess
+      let wrongGuessHint = null;
+      if (!result.correct && !result.gameOver) {
+        try {
+          console.log(`[HANGMAN] Generating hint for wrong guess (${result.wrongGuesses} wrong guesses)...`);
+          const PORT = process.env.PORT || 4000;
+          const hintResponse = await fetch(`http://localhost:${PORT}/api/templates/wrong-guess-hint`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              word: game.word,
+              wrongGuesses: result.wrongGuesses,
+            }),
+          });
+
+          if (!hintResponse.ok) {
+            throw new Error(`Hint API returned ${hintResponse.status}`);
+          }
+
+          const hintData = await hintResponse.json();
+          if (hintData.success) {
+            wrongGuessHint = hintData.hint;
+            console.log(`[HANGMAN] Generated wrong guess hint: "${wrongGuessHint}"`);
+          } else {
+            console.warn('[HANGMAN] Hint API returned no success:', hintData);
+          }
+        } catch (hintError) {
+          console.error('[HANGMAN] Failed to generate wrong guess hint:', hintError.message);
+        }
+      }
+
+      // Broadcast guess result to everyone in room
+      io.to(roomId).emit('hangman-guess-result', {
+        letter,
+        correct: result.correct,
+        guesser: socket.userName,
+        revealedWord: result.revealedWord,
+        guessedLetters: game.guessedLetters,
+        wrongGuesses: result.wrongGuesses,
+        maxWrongGuesses: result.maxWrongGuesses,
+        status: result.status,
+        gameOver: result.gameOver,
+        winner: game.winner,
+        word: result.gameOver ? game.word : undefined, // Reveal word when game ends
+        wrongGuessHint: wrongGuessHint, // Include hint for wrong guesses
+      });
+
+      console.log(`${socket.userName} guessed '${letter}' - ${result.correct ? 'CORRECT' : 'WRONG'}`);
+
+    } catch (err) {
+      console.error('Guess letter error:', err);
+      socket.emit('hangman-error', { message: 'Failed to process guess' });
+    }
+  });
+
+  // Get current game state
+  socket.on('get-hangman-state', async ({ roomId }) => {
+    try {
+      const game = await HangmanGame.findOne({
+        whiteboardId: roomId,
+        status: 'active',
+      });
+
+      if (!game) {
+        return socket.emit('hangman-no-game');
+      }
+
+      socket.emit('hangman-game-state', {
+        gameId: game._id,
+        revealedWord: game.getRevealedWord(),
+        guessedLetters: game.guessedLetters,
+        availableLetters: game.getAvailableLetters(),
+        wrongGuesses: game.wrongGuesses,
+        maxWrongGuesses: game.maxWrongGuesses,
+        status: game.status,
+        players: game.players.length,
+        hint: game.hint,
+      });
+    } catch (err) {
+      console.error('Hangman state error:', err);
+    }
+  });
+
+  // End hangman game early
+  socket.on('end-hangman-game', async ({ roomId }) => {
+    try {
+      if (!roomId) {
+        console.error('[HANGMAN] End game error: No roomId provided');
+        return socket.emit('hangman-error', { message: 'No room ID provided' });
+      }
+
+      console.log(`[HANGMAN] ${socket.userName} attempting to end game in room ${roomId}`);
+
+      const game = await HangmanGame.findOne({
+        whiteboardId: roomId,
+        status: 'active',
+      });
+
+      if (!game) {
+        console.log(`[HANGMAN] No active game found in room ${roomId}`);
+        return socket.emit('hangman-error', { message: 'No active game found' });
+      }
+
+      // Update game status to lost (ended early)
+      game.status = 'lost';
+      game.completedAt = new Date();
+      await game.save();
+
+      console.log(`[HANGMAN] Game ended early in room ${roomId} by ${socket.userName}`);
+
+      // Broadcast to everyone in room that game was ended
+      io.to(roomId).emit('hangman-game-ended', {
+        gameId: game._id,
+        word: game.word,
+        endedBy: socket.userName,
+      });
+
+    } catch (err) {
+      console.error('[HANGMAN] End hangman game error:', err.message, err.stack);
+      socket.emit('hangman-error', { message: `Failed to end game: ${err.message}` });
+    }
+  });
+
   // disconnect
   socket.on('disconnect', async (reason) => {
     try {
@@ -467,7 +764,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// =============== CLEANUP JOBS ==============
+//  CLEANUP STUFF
 
 // stale connections (5 min)
 setInterval(async () => {
@@ -498,7 +795,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-// ==================== DATABASE ====================
+//  DATABASE CONNECTION
 
 const connectDB = async () => {
   try {
@@ -517,7 +814,7 @@ const connectDB = async () => {
   }
 };
 
-// ==================== START ====================
+//  START 
 
 const PORT = process.env.PORT || 4000;
 
@@ -534,7 +831,7 @@ connectDB().then(() => {
   });
 });
 
-// ==================== SHUTDOWN ====================
+//  SHUTDOWN 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
